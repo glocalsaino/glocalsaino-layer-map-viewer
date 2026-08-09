@@ -1,4 +1,4 @@
-/* KML Map Viewer v2 – frontend */
+/* KML Map Viewer v3 – frontend */
 ( function () {
     'use strict';
 
@@ -23,11 +23,13 @@
     function initAll() {
         document.querySelectorAll( '.kml-map-canvas[data-kml-layers]' ).forEach( function ( el ) {
             try {
-                var layers        = JSON.parse( el.getAttribute( 'data-kml-layers' ) );
-                var visibleFields = JSON.parse( el.getAttribute( 'data-kml-fields' ) || 'null' );
-                var filterField   = el.getAttribute( 'data-kml-filter-field' ) || 'NUM_SOCIO';
+                var layers            = JSON.parse( el.getAttribute( 'data-kml-layers' ) );
+                var visibleFields     = JSON.parse( el.getAttribute( 'data-kml-fields' ) || 'null' );
+                var filterField       = el.getAttribute( 'data-kml-filter-field' ) || 'NUM_SOCIO';
+                var filterValues      = JSON.parse( el.getAttribute( 'data-kml-filter-values' ) || '[]' );
+                var filterValueBounds = JSON.parse( el.getAttribute( 'data-kml-filter-value-bounds' ) || '{}' );
                 if ( Array.isArray( layers ) && layers.length ) {
-                    initMap( el.id, layers, visibleFields, filterField );
+                    initMap( el.id, layers, visibleFields, filterField, filterValues, filterValueBounds );
                 }
             } catch ( e ) {
                 console.error( 'kml-map: JSON inválido', e );
@@ -42,9 +44,13 @@
     }
 
     // -----------------------------------------------------------------------
-    function initMap( uid, kmlLayers, visibleFields, filterField ) {
+    function initMap( uid, kmlLayers, visibleFields, filterField, filterValuesFromServer, filterValueBounds ) {
 
-        var map = L.map( uid, { zoomControl: true, maxZoom: 22 } );
+        // Canvas en vez de SVG (por defecto en Leaflet): con muchos objetos a
+        // la vez el SVG crea un nodo del DOM por cada uno y se vuelve muy
+        // pesado, sobre todo en móviles; Canvas dibuja todo en un único
+        // elemento.
+        var map = L.map( uid, { zoomControl: true, maxZoom: 22, renderer: L.canvas() } );
 
         // --- Capas base ---
         var osm = L.tileLayer(
@@ -58,182 +64,274 @@
         satellite.addTo( map );
 
         var baseLayers = {
-            'Sat\u00e9lite (Google)': satellite,
+            'Satélite (Google)': satellite,
             'OpenStreetMap': osm
         };
 
-        // --- Cargar cada KML como capa de overlay independiente ---
-        var layerData   = [];   // [{features, displayLayer}, ...]
-        var overlays    = {};   // { 'nombre': displayLayer }
-        var loadedCount = 0;
+        // URL del endpoint que sirve los objetos de una capa por páginas (ver
+        // kml_map_rest_get_features en PHP), inyectada por wp_localize_script.
+        var restUrl = ( typeof KmlMapConfig !== 'undefined' && KmlMapConfig.restUrl ) ? KmlMapConfig.restUrl : null;
+
+        // --- Definir cada capa KML ---
+        // El bounding box de cada capa lo calcula el servidor al analizarla
+        // en segundo plano, así que el mapa puede encuadrarse al instante. En
+        // cuanto se abre el mapa se empieza a pedir cada capa entera al
+        // servidor, página a página (ver fetchLayerPage): una vez cargado un
+        // objeto se queda en el mapa, visible a cualquier nivel de zoom, sin
+        // volver a pedirse ni desaparecer.
+        var layerData     = [];   // [{name, url, bounds, displayLayer, requestSeq, loading}, ...]
+        var overlays      = {};   // { 'nombre': displayLayer }
+        var currentFilter = [];   // valores seleccionados en el filtro (vacío = sin filtro)
+
+        // El desplegable del filtro se precarga con los valores calculados
+        // en el servidor, así funciona desde el primer instante.
+        var filterValues = Array.isArray( filterValuesFromServer )
+            ? filterValuesFromServer.map( String )
+            : [];
+        var filterSelect = null;
 
         kmlLayers.forEach( function ( kml, i ) {
             var palette      = COLORS[ i % COLORS.length ];
             var fillColor    = ( kml.color && kml.color.length === 7 ) ? kml.color         : palette.fill;
             var strokeColor  = ( kml.color && kml.color.length === 7 ) ? darken(kml.color, 0.3) : palette.stroke;
 
-            var displayLayer = L.geoJSON( null, {
-                style: function () {
-                    return {
-                        color:       strokeColor,
-                        weight:      1.5,
-                        fillColor:   fillColor,
-                        fillOpacity: 0.6
-                    };
-                },
-                onEachFeature: function ( feature, layer ) {
-                    if ( ! feature.properties ) return;
-                    var rows = '';
-                    for ( var k in feature.properties ) {
-                        if ( HIDDEN_FIELDS.indexOf( k ) !== -1 ) continue;
-                        if ( visibleFields !== null && visibleFields.indexOf( k ) === -1 ) continue;
-                        var v = feature.properties[ k ];
-                        if ( v !== null && v !== undefined && v !== '' ) {
-                            rows += '<tr>'
-                                + '<td style="padding:3px 8px;font-weight:bold;white-space:nowrap;border-bottom:1px solid #eee">'
-                                + escHtml( k ) + '</td>'
-                                + '<td style="padding:3px 8px;border-bottom:1px solid #eee">'
-                                + escHtml( String( v ) ) + '</td>'
-                                + '</tr>';
-                        }
-                    }
-                    // Indicar de qué capa viene
-                    rows += '<tr><td colspan="2" style="padding:3px 8px;font-size:11px;color:#888;font-style:italic">'
-                        + 'Capa: ' + escHtml( kml.name ) + '</td></tr>';
+            function style() {
+                return {
+                    color:       strokeColor,
+                    weight:      1.5,
+                    fillColor:   fillColor,
+                    fillOpacity: 0.6
+                };
+            }
 
-                    layer.bindPopup(
-                        '<table style="border-collapse:collapse;font-size:13px;font-family:sans-serif">'
-                        + rows + '</table>',
-                        { maxHeight: 320 }
-                    );
+            function onEachFeature( feature, layer ) {
+                if ( ! feature.properties ) return;
+                var rows = '';
+                for ( var k in feature.properties ) {
+                    if ( HIDDEN_FIELDS.indexOf( k ) !== -1 ) continue;
+                    if ( visibleFields !== null && visibleFields.indexOf( k ) === -1 ) continue;
+                    var v = feature.properties[ k ];
+                    if ( v !== null && v !== undefined && v !== '' ) {
+                        rows += '<tr>'
+                            + '<td style="padding:3px 8px;font-weight:bold;white-space:nowrap;border-bottom:1px solid #eee">'
+                            + escHtml( k ) + '</td>'
+                            + '<td style="padding:3px 8px;border-bottom:1px solid #eee">'
+                            + escHtml( String( v ) ) + '</td>'
+                            + '</tr>';
+                    }
                 }
-            } ).addTo( map );
+                // Indicar de qué capa viene
+                rows += '<tr><td colspan="2" style="padding:3px 8px;font-size:11px;color:#888;font-style:italic">'
+                    + 'Capa: ' + escHtml( kml.name ) + '</td></tr>';
 
-            var features = [];
-            layerData.push( { features: features, displayLayer: displayLayer } );
+                layer.bindPopup(
+                    '<table style="border-collapse:collapse;font-size:13px;font-family:sans-serif">'
+                    + rows + '</table>',
+                    { maxHeight: 320 }
+                );
+            }
+
+            var displayLayer = L.geoJSON( null, { style: style, onEachFeature: onEachFeature } );
+
+            var bounds = null;
+            if ( Array.isArray( kml.bounds ) && kml.bounds.length === 4 ) {
+                // PHP envía [south, west, north, east]
+                bounds = L.latLngBounds(
+                    [ kml.bounds[0], kml.bounds[1] ],
+                    [ kml.bounds[2], kml.bounds[3] ]
+                );
+            }
+
+            var ld = {
+                name:          kml.name,
+                url:           kml.url,
+                bounds:        bounds,   // límites de la capa completa, calculados en el servidor
+                displayLayer:  displayLayer,
+                requestSeq:    0,        // para descartar respuestas de peticiones obsoletas (p.ej. tras cambiar el filtro)
+                loading:       null      // { shown, total } mientras se siguen pidiendo páginas de esta capa
+            };
+            layerData.push( ld );
+
             overlays[ kml.name ] = displayLayer;
-
-            // Cargar KML con omnivore usando displayLayer directamente
-            omnivore.kml( kml.url, null, displayLayer )
-                .on( 'ready', function () {
-                    displayLayer.eachLayer( function ( l ) {
-                        if ( l.feature ) features.push( l.feature );
-                    } );
-
-                    loadedCount++;
-                    if ( loadedCount === kmlLayers.length ) {
-                        onAllLoaded();
-                    }
-                } )
-                .on( 'error', function () {
-                    console.error( 'kml-map [' + uid + ']: error al cargar', kml.url );
-                    loadedCount++;
-                    if ( loadedCount === kmlLayers.length ) onAllLoaded();
-                } );
         } );
 
-        // --- Cuando todas las capas han cargado ---
-        function onAllLoaded() {
-            // Control de capas (base + overlays)
-            L.control.layers( baseLayers, overlays, {
-                position:  'topright',
-                collapsed: true
-            } ).addTo( map );
+        // Vista inicial a partir de los límites ya conocidos (sin pedir nada
+        // al servidor): el mapa aparece de inmediato.
+        fitAll();
 
-            // Ajustar vista a todas las capas
-            fitAll();
+        // Control de capas (base + overlays): el usuario puede ocultar o
+        // volver a mostrar una capa manualmente en cualquier momento;
+        // Leaflet gestiona ese añadir/quitar por su cuenta, sin que dependa
+        // del zoom.
+        L.control.layers( baseLayers, overlays, {
+            position:  'topright',
+            collapsed: true
+        } ).addTo( map );
 
-            // Construir filtro con todos los valores únicos del campo de filtrado
-            buildFilter();
+        // Aviso mientras una capa muy densa sigue cargando por páginas (ver
+        // fetchLayerPage): informa del progreso en vez de dejar que el
+        // usuario piense que esos objetos no van a aparecer nunca.
+        var loadingIndicator = L.control( { position: 'bottomleft' } );
+        loadingIndicator.onAdd = function () {
+            var div = L.DomUtil.create( 'div' );
+            div.style.cssText = 'background:#e7f1ff;color:#0a3766;padding:4px 10px;'
+                + 'border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.3);font-size:12px;'
+                + 'font-family:sans-serif;line-height:1.4;max-width:260px;display:none';
+            loadingIndicator._div = div;
+            return div;
+        };
+        loadingIndicator.addTo( map );
 
-            setTimeout( function () { map.invalidateSize(); }, 150 );
+        function updateLoadingIndicator() {
+            var div = loadingIndicator._div;
+            if ( ! div ) return;
+
+            var messages = [];
+            layerData.forEach( function ( ld ) {
+                if ( ld.loading ) {
+                    messages.push(
+                        '⏳ ' + escHtml( ld.name ) + ': cargando objetos… (' + ld.loading.shown
+                        + ' de ' + ld.loading.total + ')'
+                    );
+                }
+            } );
+
+            if ( messages.length ) {
+                div.innerHTML = messages.join( '<br>' );
+                div.style.display = 'block';
+            } else {
+                div.style.display = 'none';
+            }
         }
 
-        // --- Ajustar mapa a todos los layers visibles ---
-        function fitAll() {
-            var validLayers = layerData
-                .map( function ( d ) { return d.displayLayer; } )
-                .filter( function ( l ) {
-                    try { return l.getBounds().isValid(); } catch(e) { return false; }
-                } );
+        initFilterUI();
 
-            if ( validLayers.length ) {
-                var group = L.featureGroup( validLayers );
-                if ( group.getBounds().isValid() ) {
-                    map.fitBounds( group.getBounds(), { padding: [ 20, 20 ] } );
-                }
+        // Todas las capas se añaden al mapa y empiezan a cargarse en cuanto
+        // se abre el mapa; una vez cargado un objeto no se vuelve a tocar ni
+        // se retira al hacer zoom o mover el mapa: se ve a cualquier nivel.
+        layerData.forEach( function ( ld ) {
+            map.addLayer( ld.displayLayer );
+            fetchLayerFeatures( ld );
+        } );
+
+        function fetchLayerFeatures( ld ) {
+            if ( ! restUrl ) return;
+
+            var token = ++ld.requestSeq;
+
+            ld.displayLayer.clearLayers();
+            ld.loading = null;
+
+            fetchLayerPage( ld, token, 0 );
+        }
+
+        // Pide una página de objetos de la capa; si el servidor avisa de que
+        // hay más ('has_more'), sigue pidiendo automáticamente las
+        // siguientes hasta tener la capa completa. Así una capa muy densa se
+        // va rellenando en segundo plano en varias peticiones ligeras (de
+        // KML_MAP_PAGE_SIZE objetos cada una) en vez de una única petición
+        // gigante que podría colgar la página, sobre todo en móvil.
+        function fetchLayerPage( ld, token, page ) {
+            var url = restUrl
+                + '?url='  + encodeURIComponent( ld.url )
+                + '&page=' + page;
+
+            if ( currentFilter.length ) {
+                url += '&filter_field=' + encodeURIComponent( filterField )
+                    + '&filter_values=' + encodeURIComponent( currentFilter.join( ',' ) );
+            }
+
+            fetch( url )
+                .then( function ( r ) { return r.json(); } )
+                .then( function ( geojson ) {
+                    if ( token !== ld.requestSeq ) return; // ha llegado tarde: ya no es la petición actual (p.ej. cambió el filtro)
+
+                    if ( geojson && geojson.features && geojson.features.length ) {
+                        ld.displayLayer.addData( geojson );
+                    }
+
+                    if ( geojson && geojson.has_more ) {
+                        ld.loading = { shown: ld.displayLayer.getLayers().length, total: geojson.total };
+                        updateLoadingIndicator();
+                        fetchLayerPage( ld, token, page + 1 );
+                    } else {
+                        // Ya no quedan más páginas: la capa está completa.
+                        ld.loading = null;
+                        updateLoadingIndicator();
+                    }
+                } )
+                .catch( function ( e ) {
+                    console.error( 'kml-map [' + uid + ']: error al pedir objetos', e );
+                    ld.loading = null;
+                    updateLoadingIndicator();
+                } );
+        }
+
+        // --- Ajustar mapa a todas las capas (usa los límites conocidos, sin
+        // pedir nada al servidor) ---
+        function fitAll() {
+            var group = L.latLngBounds( [] );
+            layerData.forEach( function ( d ) {
+                if ( d.bounds && d.bounds.isValid() ) group.extend( d.bounds );
+            } );
+            if ( group.isValid() ) {
+                map.fitBounds( group, { padding: [ 20, 20 ] } );
+            } else {
+                // Ningún límite conocido todavía (análisis en segundo plano
+                // aún no terminado). Sin esto el mapa se queda sin vista y
+                // map.getBounds()/getZoom() más adelante rompen toda la
+                // inicialización. Vista de partida genérica de España.
+                map.setView( [ 40.4168, -3.7038 ], 6 );
             }
         }
 
         // --- Filtro por campo configurable ---
-        function buildFilter() {
-            var values = [];
-            layerData.forEach( function ( d ) {
-                d.features.forEach( function ( f ) {
-                    var v = f.properties && f.properties[ filterField ];
-                    if ( v != null && v !== '' && values.indexOf( String( v ) ) === -1 ) {
-                        values.push( String( v ) );
-                    }
-                } );
-            } );
-            values.sort();
+        function initFilterUI() {
+            filterSelect = document.getElementById( uid + '-sel' );
+            if ( ! filterSelect ) return;
 
-            var sel = document.getElementById( uid + '-sel' );
-            if ( ! sel ) return;
-
-            sel.size = Math.min( values.length, 6 ) || 1;
-            values.forEach( function ( v ) {
-                var opt       = document.createElement( 'option' );
-                opt.value     = v;
+            filterValues.forEach( function ( v ) {
+                var opt         = document.createElement( 'option' );
+                opt.value       = v;
                 opt.textContent = v;
-                sel.appendChild( opt );
+                filterSelect.appendChild( opt );
             } );
+            filterSelect.size = Math.min( filterValues.length, 6 ) || 1;
 
-            sel.addEventListener( 'change', applyFilter );
+            filterSelect.addEventListener( 'change', applyFilter );
 
             var clearBtn = document.getElementById( uid + '-clear' );
             if ( clearBtn ) {
                 clearBtn.addEventListener( 'click', function () {
-                    for ( var i = 0; i < sel.options.length; i++ ) sel.options[ i ].selected = false;
+                    for ( var i = 0; i < filterSelect.options.length; i++ ) filterSelect.options[ i ].selected = false;
                     applyFilter();
                 } );
             }
         }
 
         function applyFilter() {
-            var sel      = document.getElementById( uid + '-sel' );
-            var selected = [];
-            for ( var i = 0; i < sel.options.length; i++ ) {
-                if ( sel.options[ i ].selected ) selected.push( sel.options[ i ].value );
+            currentFilter = [];
+            for ( var i = 0; i < filterSelect.options.length; i++ ) {
+                if ( filterSelect.options[ i ].selected ) currentFilter.push( filterSelect.options[ i ].value );
             }
 
-            layerData.forEach( function ( d ) {
-                var filtered = selected.length === 0
-                    ? d.features
-                    : d.features.filter( function ( f ) {
-                        return selected.indexOf( String( f.properties[ filterField ] ) ) >= 0;
-                    } );
-
-                d.displayLayer.clearLayers();
-                if ( filtered.length ) {
-                    d.displayLayer.addData( { type: 'FeatureCollection', features: filtered } );
-                }
-            } );
-
-            // Ajustar vista solo a las capas actualmente visibles en el mapa
-            var visibleLayers = layerData
-                .filter( function ( d ) { return map.hasLayer( d.displayLayer ); } )
-                .map( function ( d ) { return d.displayLayer; } )
-                .filter( function ( l ) {
-                    try { return l.getBounds().isValid(); } catch(e) { return false; }
+            // Encuadrar la vista a los objetos que cumplen el filtro usando
+            // los límites por valor precalculados en el servidor (sin
+            // descargar nada); sin filtro, se vuelve al encuadre general.
+            if ( currentFilter.length && filterValueBounds ) {
+                var group = L.latLngBounds( [] );
+                currentFilter.forEach( function ( v ) {
+                    var b = filterValueBounds[ v ];
+                    if ( b ) group.extend( L.latLngBounds( [ b[0], b[1] ], [ b[2], b[3] ] ) );
                 } );
-
-            if ( visibleLayers.length ) {
-                var group = L.featureGroup( visibleLayers );
-                if ( group.getBounds().isValid() ) {
-                    map.fitBounds( group.getBounds(), { padding: [ 20, 20 ] } );
-                }
+                if ( group.isValid() ) map.fitBounds( group, { padding: [ 20, 20 ] } );
+            } else {
+                fitAll();
             }
+
+            // El filtro cambia lo que hay que pedir al servidor: se vuelve a
+            // cargar cada capa desde cero con el nuevo filtro aplicado.
+            layerData.forEach( function ( ld ) { fetchLayerFeatures( ld ); } );
         }
     }
 

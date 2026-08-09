@@ -14,6 +14,10 @@ $errors = [
     'badext'  => 'Los archivos deben tener extensión .kml.',
 ];
 
+// Tamaño máximo de subida (mismo límite que usa la Biblioteca de medios de
+// WordPress: lo marca la configuración de PHP del hosting)
+$max_upload_size = size_format( wp_max_upload_size() );
+
 // Paleta de colores (misma que en el JS, para mostrar muestra visual)
 $palette = [
     '#4daf4a', // verde
@@ -43,6 +47,9 @@ $palette = [
     <?php endif; ?>
     <?php if ( isset( $_GET['saved_fields'] ) ) : ?>
         <div class="notice notice-success is-dismissible"><p>✔ Configuración de campos guardada.</p></div>
+    <?php endif; ?>
+    <?php if ( isset( $_GET['analyzed'] ) ) : ?>
+        <div class="notice notice-success is-dismissible"><p>✔ Análisis completado.</p></div>
     <?php endif; ?>
     <?php if ( isset( $_GET['error'] ) ) : ?>
         <div class="notice notice-error is-dismissible">
@@ -81,7 +88,7 @@ $palette = [
                         <p class="description">
                             Puedes seleccionar varios archivos a la vez (Ctrl+clic o Cmd+clic).<br>
                             Elige el color de cada capa antes de subir.<br>
-                            Todos deben incluir el campo <strong>NUM_SOCIO</strong>.
+                            Tamaño máximo de subida: <strong><?php echo esc_html( $max_upload_size ); ?></strong> por archivo.
                         </p>
                     </td>
                 </tr>
@@ -106,15 +113,21 @@ $palette = [
         <?php foreach ( $maps as $map ) :
             $layers           = json_decode( get_post_meta( $map->ID, '_kml_layers', true ), true ) ?: [];
             $fields_available = json_decode( get_post_meta( $map->ID, '_kml_fields_available', true ), true ) ?: [];
+            $filter_field     = get_post_meta( $map->ID, '_kml_filter_field', true ) ?: 'NUM_SOCIO';
 
-            // Si el mapa tiene capas pero aún no tiene campos extraídos, escanear ahora
-            if ( ! empty( $layers ) && empty( $fields_available ) ) {
-                kml_map_refresh_fields( $map->ID, $layers );
-                $fields_available = json_decode( get_post_meta( $map->ID, '_kml_fields_available', true ), true ) ?: [];
+            // Si a este mapa le falta el análisis de alguna capa (recién
+            // subida, o migrada de antes de esta mejora) o los valores de
+            // filtro son de otro campo, se marca para analizar en segundo
+            // plano (WP-Cron); esto es barato, solo guarda un estado y
+            // programa el evento, nunca escanea los KML aquí en el admin.
+            $layers = kml_map_ensure_layers_queued( $map->ID, $layers, $filter_field );
+
+            $pending = false;
+            foreach ( $layers as $l ) {
+                if ( empty( $l['analyzed'] ) ) { $pending = true; break; }
             }
 
             $fields_visible = json_decode( get_post_meta( $map->ID, '_kml_fields_visible', true ), true );
-            $filter_field   = get_post_meta( $map->ID, '_kml_filter_field', true ) ?: 'NUM_SOCIO';
         ?>
         <div style="background:#fff;border:1px solid #c3c4c7;border-radius:4px;margin-bottom:18px;max-width:860px">
 
@@ -126,6 +139,12 @@ $palette = [
                     <span style="color:#999;font-size:12px;margin-left:10px">
                         <?php echo esc_html( get_the_date( 'd/m/Y', $map ) ); ?>
                     </span>
+                    <?php if ( $pending ) : ?>
+                        <span style="background:#fcf0cd;color:#7a5b00;font-size:11px;font-weight:600;
+                                     padding:2px 8px;border-radius:10px;margin-left:8px;white-space:nowrap">
+                            ⏳ Procesando capas en segundo plano&hellip;
+                        </span>
+                    <?php endif; ?>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                     <code style="background:#f0f0f1;padding:4px 8px;border-radius:3px">
@@ -137,6 +156,16 @@ $palette = [
                                 this.textContent='¡Copiado!';
                                 var b=this; setTimeout(function(){b.textContent='Copiar shortcode';},2000);
                             ">Copiar shortcode</button>
+                    <?php if ( $pending ) : ?>
+                        <a href="<?php echo esc_url( wp_nonce_url(
+                            admin_url( 'admin-post.php?action=kml_map_analyze_now&map_id=' . $map->ID ),
+                            'kml_map_analyze_now_' . $map->ID
+                        ) ); ?>"
+                           class="button button-small"
+                           title="Fuerza el análisis ahora mismo, por si el proceso en segundo plano (WP-Cron) no se ha disparado solo. Puede tardar si el KML es muy grande.">
+                            Analizar ahora
+                        </a>
+                    <?php endif; ?>
                     <a href="<?php echo esc_url( wp_nonce_url(
                         admin_url( 'admin-post.php?action=kml_map_delete&id=' . $map->ID ),
                         'kml_map_delete_' . $map->ID
@@ -183,6 +212,11 @@ $palette = [
                                 </td>
                                 <td style="padding:6px 8px;font-weight:500">
                                     <?php echo esc_html( $layer['name'] ); ?>
+                                    <?php if ( empty( $layer['analyzed'] ) ) : ?>
+                                        <span style="color:#b26b00;font-size:11px;font-weight:normal;white-space:nowrap">
+                                            ⏳ procesando
+                                        </span>
+                                    <?php endif; ?>
                                 </td>
                                 <td style="padding:6px 8px;font-size:12px;color:#666">
                                     <?php echo esc_html( basename( $layer['url'] ) ); ?>
@@ -224,7 +258,8 @@ $palette = [
                                 <div class="kml-color-pickers"></div>
                             </div>
                             <p class="description" style="margin:6px 0 10px">
-                                Puedes seleccionar varios archivos. Elige el color de cada capa antes de subir.
+                                Puedes seleccionar varios archivos. Elige el color de cada capa antes de subir.<br>
+                                Tamaño máximo de subida: <strong><?php echo esc_html( $max_upload_size ); ?></strong> por archivo.
                             </p>
                             <button type="submit" class="button button-primary">Añadir capas</button>
                         </form>
