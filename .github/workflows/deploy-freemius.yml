@@ -1,0 +1,44 @@
+name: Deploy to Freemius
+
+# Se dispara al subir una etiqueta tipo v4.5.0 (git tag v4.5.0 && git push --tags).
+# Empaqueta el plugin en un zip con la estructura que espera Freemius/WordPress
+# (todo dentro de una carpeta "kml-map/") y lo publica en Freemius, que a su
+# vez genera las versiones gratuita y premium.
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build plugin zip
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p build/kml-map
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.wordpress-org' \
+            --exclude='build' \
+            ./ build/kml-map/
+          (cd build && zip -r ../kml-map.zip kml-map)
+          echo "PLUGIN_VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Deploy to Freemius
+        uses: buttonizer/freemius-deploy@v0.1.2
+        with:
+          file_name: kml-map.zip
+          release_mode: pending
+          version: ${{ env.PLUGIN_VERSION }}
+          sandbox: false
+        env:
+          PUBLIC_KEY: ${{ secrets.FREEMIUS_PUBLIC_KEY }}
+          DEV_ID: ${{ secrets.FREEMIUS_DEV_ID }}
+          SECRET_KEY: ${{ secrets.FREEMIUS_SECRET_KEY }}
+          PLUGIN_SLUG: kml-map
+          PLUGIN_ID: ${{ secrets.FREEMIUS_PLUGIN_ID }}
