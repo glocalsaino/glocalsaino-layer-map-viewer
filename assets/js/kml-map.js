@@ -25,7 +25,7 @@
             try {
                 var layers            = JSON.parse( el.getAttribute( 'data-kml-layers' ) );
                 var visibleFields     = JSON.parse( el.getAttribute( 'data-kml-fields' ) || 'null' );
-                var filterField       = el.getAttribute( 'data-kml-filter-field' ) || 'NUM_SOCIO';
+                var filterField       = el.getAttribute( 'data-kml-filter-field' ) || '';
                 var filterValues      = JSON.parse( el.getAttribute( 'data-kml-filter-values' ) || '[]' );
                 var filterValueBounds = JSON.parse( el.getAttribute( 'data-kml-filter-value-bounds' ) || '{}' );
                 if ( Array.isArray( layers ) && layers.length ) {

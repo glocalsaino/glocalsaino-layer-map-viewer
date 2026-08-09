@@ -9,14 +9,46 @@ $maps = get_posts( [
 ] );
 
 $errors = [
-    'notitle' => 'Debes introducir un nombre para el mapa.',
-    'nofile'  => 'Debes seleccionar al menos un archivo KML.',
-    'badext'  => 'Los archivos deben tener extensión .kml.',
+    'notitle'  => 'Debes introducir un nombre para el mapa.',
+    'nofile'   => 'Debes seleccionar al menos un archivo KML.',
+    'badext'   => 'Los archivos deben tener extensión .kml.',
+    'maplimit' => 'La versión gratuita permite crear hasta ' . KML_MAP_FREE_MAP_LIMIT . ' mapas. Activa la versión premium para crear mapas ilimitados.',
 ];
 
 // Tamaño máximo de subida (mismo límite que usa la Biblioteca de medios de
 // WordPress: lo marca la configuración de PHP del hosting)
 $max_upload_size = size_format( wp_max_upload_size() );
+
+// Funciones premium (ver kml_map_is_premium() en wp-kml-map.php): mapas
+// ilimitados, añadir más capas a un mapa ya creado, configurar los campos
+// del popup y personalizar el aspecto de la caja de filtro. La gratuita
+// permite crear hasta KML_MAP_FREE_MAP_LIMIT mapas, cada uno con varias
+// capas KML a la vez.
+$kml_map_is_premium    = kml_map_is_premium();
+$kml_map_maps_count    = wp_count_posts( 'kml_map' )->publish;
+$kml_map_limit_reached = ( ! $kml_map_is_premium && $kml_map_maps_count >= KML_MAP_FREE_MAP_LIMIT );
+
+// Aviso reutilizable para las dos funciones premium de esta página.
+$kml_map_premium_notice = function ( $title, $description ) {
+    ?>
+    <div style="margin-top:14px;padding:14px;background:#fbf7ec;border:1px solid #e9dcb0;border-radius:4px;
+                display:flex;align-items:flex-start;gap:10px">
+        <span style="font-size:16px;line-height:1.3">🔒</span>
+        <div>
+            <p style="margin:0 0 6px;font-size:13px;font-weight:600;color:#6b5a1e">
+                <?php echo esc_html( $title ); ?> — función premium
+            </p>
+            <p style="margin:0 0 10px;font-size:13px;color:#7a6a30">
+                <?php echo esc_html( $description ); ?>
+            </p>
+            <a href="<?php echo esc_url( kml_map_fs()->get_upgrade_url() ); ?>"
+               class="button button-primary button-small">
+                Ver planes premium
+            </a>
+        </div>
+    </div>
+    <?php
+};
 
 // Paleta de colores (misma que en el JS, para mostrar muestra visual)
 $palette = [
@@ -54,17 +86,29 @@ $palette = [
     <?php if ( isset( $_GET['saved_fill'] ) ) : ?>
         <div class="notice notice-success is-dismissible"><p>✔ Relleno actualizado.</p></div>
     <?php endif; ?>
-    <?php if ( isset( $_GET['error'] ) ) : ?>
+    <?php if ( isset( $_GET['saved_bar_style'] ) ) : ?>
+        <div class="notice notice-success is-dismissible"><p>✔ Aspecto de la caja de filtro actualizado.</p></div>
+    <?php endif; ?>
+    <?php if ( isset( $_GET['error'] ) ) :
+        $kml_map_error_code = sanitize_text_field( wp_unslash( $_GET['error'] ) );
+    ?>
         <div class="notice notice-error is-dismissible">
-            <p>Error: <?php echo esc_html( $errors[ $_GET['error'] ] ?? $_GET['error'] ); ?></p>
+            <p>Error: <?php echo esc_html( $errors[ $kml_map_error_code ] ?? $kml_map_error_code ); ?></p>
         </div>
     <?php endif; ?>
 
     <!-- ================================================================
-         Formulario: crear nuevo mapa
+         Formulario: crear nuevo mapa (limitado a KML_MAP_FREE_MAP_LIMIT
+         mapas en la versión gratuita)
     ================================================================ -->
     <div style="background:#fff;border:1px solid #c3c4c7;border-radius:4px;padding:20px 24px;max-width:640px;margin:20px 0">
         <h2 style="margin-top:0">Crear nuevo mapa</h2>
+        <?php if ( $kml_map_limit_reached ) : ?>
+            <?php $kml_map_premium_notice(
+                'Límite de mapas alcanzado',
+                'La versión gratuita permite crear hasta ' . KML_MAP_FREE_MAP_LIMIT . ' mapas (tienes ' . (int) $kml_map_maps_count . '). Activa la versión premium para crear mapas ilimitados.'
+            ); ?>
+        <?php else : ?>
         <form method="post"
               action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"
               enctype="multipart/form-data">
@@ -98,6 +142,7 @@ $palette = [
             </table>
             <?php submit_button( 'Crear mapa', 'primary', 'submit', false ); ?>
         </form>
+        <?php endif; ?>
     </div>
 
     <!-- ================================================================
@@ -116,7 +161,7 @@ $palette = [
         <?php foreach ( $maps as $map ) :
             $layers           = json_decode( get_post_meta( $map->ID, '_kml_layers', true ), true ) ?: [];
             $fields_available = json_decode( get_post_meta( $map->ID, '_kml_fields_available', true ), true ) ?: [];
-            $filter_field     = get_post_meta( $map->ID, '_kml_filter_field', true ) ?: 'NUM_SOCIO';
+            $filter_field     = get_post_meta( $map->ID, '_kml_filter_field', true ) ?: '';
 
             // Si a este mapa le falta el análisis de alguna capa (recién
             // subida, o migrada de antes de esta mejora) o los valores de
@@ -131,6 +176,7 @@ $palette = [
             }
 
             $fields_visible = json_decode( get_post_meta( $map->ID, '_kml_fields_visible', true ), true );
+            $bar_style      = json_decode( get_post_meta( $map->ID, '_kml_bar_style', true ), true ) ?: [];
         ?>
         <div style="background:#fff;border:1px solid #c3c4c7;border-radius:4px;margin-bottom:18px;max-width:860px">
 
@@ -151,11 +197,11 @@ $palette = [
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                     <code style="background:#f0f0f1;padding:4px 8px;border-radius:3px">
-                        [kml_map id="<?php echo $map->ID; ?>"]
+                        [kml_map id="<?php echo (int) $map->ID; ?>"]
                     </code>
                     <button type="button" class="button button-small"
                             onclick="
-                                navigator.clipboard.writeText('[kml_map id=&quot;<?php echo $map->ID; ?>&quot;]');
+                                navigator.clipboard.writeText('[kml_map id=&quot;<?php echo (int) $map->ID; ?>&quot;]');
                                 this.textContent='¡Copiado!';
                                 var b=this; setTimeout(function(){b.textContent='Copiar shortcode';},2000);
                             ">Copiar shortcode</button>
@@ -184,7 +230,7 @@ $palette = [
             <!-- Capas KML del mapa -->
             <div style="padding:14px 20px">
                 <p style="margin:0 0 10px;font-weight:600;color:#444">
-                    Capas KML (<?php echo count( $layers ); ?>):
+                    Capas KML (<?php echo (int) count( $layers ); ?>):
                 </p>
 
                 <?php if ( empty( $layers ) ) : ?>
@@ -209,7 +255,7 @@ $palette = [
                             $fill  = isset( $layer['fill'] ) ? (bool) $layer['fill'] : true;
                         ?>
                             <tr style="border-bottom:1px solid #f0f0f0">
-                                <td style="padding:6px 8px;color:#999;font-size:12px"><?php echo $idx + 1; ?></td>
+                                <td style="padding:6px 8px;color:#999;font-size:12px"><?php echo (int) ( $idx + 1 ); ?></td>
                                 <td style="padding:6px 8px">
                                     <span style="display:inline-block;width:16px;height:16px;
                                                  background:<?php echo $fill ? esc_attr( $color ) : 'transparent'; ?>;
@@ -232,8 +278,8 @@ $palette = [
                                           style="display:flex;align-items:center;gap:4px">
                                         <?php wp_nonce_field( 'kml_map_set_fill_' . $map->ID . '_' . $idx ); ?>
                                         <input type="hidden" name="action" value="kml_map_set_fill">
-                                        <input type="hidden" name="map_id" value="<?php echo $map->ID; ?>">
-                                        <input type="hidden" name="layer_idx" value="<?php echo $idx; ?>">
+                                        <input type="hidden" name="map_id" value="<?php echo (int) $map->ID; ?>">
+                                        <input type="hidden" name="layer_idx" value="<?php echo (int) $idx; ?>">
                                         <label style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer;white-space:nowrap">
                                             <input type="checkbox" name="no_fill" value="1" <?php checked( ! $fill ); ?>>
                                             Solo borde
@@ -258,7 +304,8 @@ $palette = [
                     </table>
                 <?php endif; ?>
 
-                <!-- Formulario para añadir más capas -->
+                <!-- Formulario para añadir más capas (premium) -->
+                <?php if ( $kml_map_is_premium ) : ?>
                 <details style="margin-top:14px">
                     <summary style="cursor:pointer;color:#2271b1;font-size:13px;font-weight:500;
                                     list-style:none;display:inline-flex;align-items:center;gap:5px">
@@ -271,7 +318,7 @@ $palette = [
                               enctype="multipart/form-data">
                             <?php wp_nonce_field( 'kml_map_add_layers_' . $map->ID ); ?>
                             <input type="hidden" name="action" value="kml_map_add_layers">
-                            <input type="hidden" name="map_id" value="<?php echo $map->ID; ?>">
+                            <input type="hidden" name="map_id" value="<?php echo (int) $map->ID; ?>">
                             <div class="kml-file-wrap">
                                 <input type="file" class="kml-file-input" name="kml_files[]"
                                        accept=".kml" multiple required>
@@ -285,66 +332,140 @@ $palette = [
                         </form>
                     </div>
                 </details>
+                <?php else : ?>
+                    <?php $kml_map_premium_notice(
+                        'Añadir más capas KML',
+                        'Con la versión gratuita puedes subir varias capas a la vez al crear el mapa. Para añadir más capas a un mapa ya creado, activa la versión premium.'
+                    ); ?>
+                <?php endif; ?>
 
-                <!-- Configuración de campos del popup -->
+                <!-- Configuración de campos del popup (premium) -->
                 <?php if ( ! empty( $fields_available ) ) : ?>
+                    <?php if ( $kml_map_is_premium ) : ?>
+                    <details style="margin-top:10px">
+                        <summary style="cursor:pointer;color:#2271b1;font-size:13px;font-weight:500;
+                                        list-style:none;display:inline-flex;align-items:center;gap:5px">
+                            <span style="font-size:16px;line-height:1">⚙</span> Campos del popup
+                        </summary>
+                        <div style="margin-top:10px;padding:14px;background:#f6f7f7;
+                                    border-radius:4px;border:1px solid #ddd">
+                            <p style="margin:0 0 10px;font-size:13px;color:#555">
+                                Selecciona los campos que se mostrarán al hacer clic en una finca y el campo por el que se filtrará:
+                            </p>
+                            <form method="post"
+                                  action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+                                <?php wp_nonce_field( 'kml_map_save_fields_' . $map->ID ); ?>
+                                <input type="hidden" name="action" value="kml_map_save_fields">
+                                <input type="hidden" name="map_id" value="<?php echo (int) $map->ID; ?>">
+
+                            <div style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid #ddd">
+                                <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">
+                                    Campo de filtrado:
+                                </label>
+                                <select name="kml_filter_field"
+                                        style="font-size:13px;padding:4px 6px;border:1px solid #b0b4bb;border-radius:4px;min-width:180px">
+                                    <?php foreach ( $fields_available as $field ) : ?>
+                                        <option value="<?php echo esc_attr( $field ); ?>"
+                                                <?php selected( $filter_field, $field ); ?>>
+                                            <?php echo esc_html( $field ); ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <p class="description" style="margin-top:4px">
+                                    El selector de la barra inferior del mapa usará este campo.
+                                </p>
+                            </div>
+                            <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">
+                                Campos visibles en el popup:
+                            </label>
+
+                                <div style="display:flex;flex-wrap:wrap;gap:6px 20px;margin-bottom:12px">
+                                    <?php foreach ( $fields_available as $field ) :
+                                        // Si $fields_visible es null (sin configurar), todos visibles por defecto
+                                        $checked = ( $fields_visible === null || in_array( $field, $fields_visible ) );
+                                    ?>
+                                    <label style="font-size:13px;display:flex;align-items:center;gap:5px;cursor:pointer">
+                                        <input type="checkbox"
+                                               name="kml_visible_fields[]"
+                                               value="<?php echo esc_attr( $field ); ?>"
+                                               <?php checked( $checked ); ?>>
+                                        <?php echo esc_html( $field ); ?>
+                                    </label>
+                                    <?php endforeach; ?>
+                                </div>
+                                <button type="submit" class="button button-primary button-small">
+                                    Guardar selección
+                                </button>
+                            </form>
+                        </div>
+                    </details>
+                    <?php else : ?>
+                        <?php $kml_map_premium_notice(
+                            'Campos del popup',
+                            'Con la versión gratuita no hay filtro configurado y el popup muestra todos los campos. Para elegir qué campos se muestran y por cuál filtrar, activa la versión premium.'
+                        ); ?>
+                    <?php endif; ?>
+                <?php endif; ?>
+
+                <!-- Aspecto de la caja de filtro (premium) -->
+                <?php if ( $kml_map_is_premium ) : ?>
                 <details style="margin-top:10px">
                     <summary style="cursor:pointer;color:#2271b1;font-size:13px;font-weight:500;
                                     list-style:none;display:inline-flex;align-items:center;gap:5px">
-                        <span style="font-size:16px;line-height:1">⚙</span> Campos del popup
+                        <span style="font-size:16px;line-height:1">🎨</span> Aspecto de la caja de filtro
                     </summary>
                     <div style="margin-top:10px;padding:14px;background:#f6f7f7;
                                 border-radius:4px;border:1px solid #ddd">
                         <p style="margin:0 0 10px;font-size:13px;color:#555">
-                            Selecciona los campos que se mostrarán al hacer clic en una finca y el campo por el que se filtrará:
+                            Colores de la barra de filtro y del botón "Limpiar filtro" que se ve bajo el mapa.
                         </p>
                         <form method="post"
                               action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
-                            <?php wp_nonce_field( 'kml_map_save_fields_' . $map->ID ); ?>
-                            <input type="hidden" name="action" value="kml_map_save_fields">
-                            <input type="hidden" name="map_id" value="<?php echo $map->ID; ?>">
+                            <?php wp_nonce_field( 'kml_map_set_bar_style_' . $map->ID ); ?>
+                            <input type="hidden" name="action" value="kml_map_set_bar_style">
+                            <input type="hidden" name="map_id" value="<?php echo (int) $map->ID; ?>">
 
-                        <div style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid #ddd">
-                            <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">
-                                Campo de filtrado:
-                            </label>
-                            <select name="kml_filter_field"
-                                    style="font-size:13px;padding:4px 6px;border:1px solid #b0b4bb;border-radius:4px;min-width:180px">
-                                <?php foreach ( $fields_available as $field ) : ?>
-                                    <option value="<?php echo esc_attr( $field ); ?>"
-                                            <?php selected( $filter_field, $field ); ?>>
-                                        <?php echo esc_html( $field ); ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                            <p class="description" style="margin-top:4px">
-                                El selector de la barra inferior del mapa usará este campo.
-                            </p>
-                        </div>
-                        <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">
-                            Campos visibles en el popup:
-                        </label>
-
-                            <div style="display:flex;flex-wrap:wrap;gap:6px 20px;margin-bottom:12px">
-                                <?php foreach ( $fields_available as $field ) :
-                                    // Si $fields_visible es null (sin configurar), todos visibles por defecto
-                                    $checked = ( $fields_visible === null || in_array( $field, $fields_visible ) );
-                                ?>
-                                <label style="font-size:13px;display:flex;align-items:center;gap:5px;cursor:pointer">
-                                    <input type="checkbox"
-                                           name="kml_visible_fields[]"
-                                           value="<?php echo esc_attr( $field ); ?>"
-                                           <?php checked( $checked ); ?>>
-                                    <?php echo esc_html( $field ); ?>
+                            <div style="display:flex;flex-wrap:wrap;gap:16px 28px;margin-bottom:14px">
+                                <label style="font-size:13px;display:flex;flex-direction:column;gap:4px">
+                                    Fondo de la barra
+                                    <input type="color" name="bar_bg"
+                                           value="<?php echo esc_attr( $bar_style['bar_bg'] ?? '#f0f2f5' ); ?>"
+                                           style="width:48px;height:30px;border:1px solid #ccc;border-radius:3px;cursor:pointer">
                                 </label>
-                                <?php endforeach; ?>
+                                <label style="font-size:13px;display:flex;flex-direction:column;gap:4px">
+                                    Texto de la barra
+                                    <input type="color" name="bar_text"
+                                           value="<?php echo esc_attr( $bar_style['bar_text'] ?? '#333333' ); ?>"
+                                           style="width:48px;height:30px;border:1px solid #ccc;border-radius:3px;cursor:pointer">
+                                </label>
+                                <label style="font-size:13px;display:flex;flex-direction:column;gap:4px">
+                                    Fondo del botón
+                                    <input type="color" name="btn_bg"
+                                           value="<?php echo esc_attr( $bar_style['btn_bg'] ?? '#c0392b' ); ?>"
+                                           style="width:48px;height:30px;border:1px solid #ccc;border-radius:3px;cursor:pointer">
+                                </label>
+                                <label style="font-size:13px;display:flex;flex-direction:column;gap:4px">
+                                    Texto del botón
+                                    <input type="color" name="btn_text"
+                                           value="<?php echo esc_attr( $bar_style['btn_text'] ?? '#ffffff' ); ?>"
+                                           style="width:48px;height:30px;border:1px solid #ccc;border-radius:3px;cursor:pointer">
+                                </label>
                             </div>
+                            <label style="font-size:13px;display:flex;align-items:center;gap:5px;cursor:pointer;margin-bottom:10px">
+                                <input type="checkbox" name="reset" value="1">
+                                Restablecer a los colores por defecto
+                            </label>
                             <button type="submit" class="button button-primary button-small">
-                                Guardar selección
+                                Guardar aspecto
                             </button>
                         </form>
                     </div>
                 </details>
+                <?php else : ?>
+                    <?php $kml_map_premium_notice(
+                        'Aspecto de la caja de filtro',
+                        'Con la versión gratuita la caja de filtro usa los colores por defecto. Para personalizarlos, activa la versión premium.'
+                    ); ?>
                 <?php endif; ?>
 
             </div>

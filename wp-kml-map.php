@@ -1,17 +1,86 @@
 <?php
 /**
- * Plugin Name: KML Map Viewer
- * Description: Sube uno o varios archivos KML y muestra mapas interactivos con capas de colores y filtro por NUM_SOCIO.
- * Version:     4.1.0
- * Author:      Glocal Saino
- * Text Domain: kml-map
+ * Plugin Name:       KML Map Viewer
+ * Description:       Sube uno o varios archivos KML y muestra mapas interactivos con capas de colores y filtro por campo configurable.
+ * Version:           4.3.0
+ * Requires at least: 5.8
+ * Requires PHP:      7.4
+ * Author:            Glocal Saino
+ * Text Domain:       kml-map
+ * License:           GPLv2 or later
+ * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'KML_MAP_VERSION', '4.1.0' );
+define( 'KML_MAP_VERSION', '4.3.0' );
 define( 'KML_MAP_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'KML_MAP_URL',     plugin_dir_url( __FILE__ ) );
+
+// Nº máximo de mapas que permite crear la versión gratuita; la premium no
+// tiene límite (ver la comprobación en admin_post_kml_map_add).
+define( 'KML_MAP_FREE_MAP_LIMIT', 3 );
+
+// ---------------------------------------------------------------------------
+// Freemius: gestiona la licencia de la versión premium (mapas ilimitados,
+// capas adicionales por mapa, configuración de campos del popup y aspecto
+// de la caja de filtro). La versión gratuita funciona por completo sin
+// esto: crear hasta 3 mapas con varias capas KML a la vez, verlos,
+// filtrarlos, etc. Solo lo que se añade DESPUÉS de crear un mapa (más capas,
+// elegir qué campos mostrar, personalizar el aspecto) o crear más de 3
+// mapas requiere una licencia activa.
+//
+// IMPORTANTE: 'id' y 'public_key' son de ejemplo. Hay que sustituirlos por
+// los que da el panel de Freemius al crear el producto (freemius.com), o el
+// SDK se queda inactivo (kml_map_fs()->can_use_premium_code() se comporta
+// como si no hubiera premium, así que las funciones de pago no aparecen ni
+// se pueden activar hasta que se rellenen estos datos reales).
+// ---------------------------------------------------------------------------
+if ( ! function_exists( 'kml_map_fs' ) ) {
+    function kml_map_fs() {
+        global $kml_map_fs;
+
+        if ( ! isset( $kml_map_fs ) ) {
+            require_once KML_MAP_DIR . 'freemius/start.php';
+
+            $kml_map_fs = fs_dynamic_init( [
+                'id'                  => '0000',                                       // TODO: Plugin ID real de Freemius
+                'slug'                => 'kml-map',                                     // TODO: debe coincidir con el slug final en WordPress.org y con el Text Domain de arriba
+                'type'                => 'plugin',
+                'public_key'          => 'pk_00000000000000000000000000000',            // TODO: clave pública real de Freemius
+                'is_premium'          => false,
+                'premium_suffix'      => 'Premium',
+                'has_premium_version' => true,
+                'has_addons'          => false,
+                'has_paid_plans'      => true,
+                'menu'                => [
+                    'slug'    => 'kml-maps',
+                    'support' => false,
+                ],
+            ] );
+        }
+
+        return $kml_map_fs;
+    }
+
+    kml_map_fs();
+    do_action( 'kml_map_fs_loaded' );
+}
+
+// Punto único desde el que se consulta si hay premium activo: así se puede
+// forzar para pruebas (ver más abajo) sin tocar cada comprobación una a una.
+//
+// Para probar las funciones premium ANTES de tener cuenta de Freemius (o en
+// un WordPress de pruebas sin conexión real), añade esta línea a
+// wp-config.php, encima de "That's all, stop editing":
+//     define( 'KML_MAP_FORCE_PREMIUM', true );
+// Quítala cuando termines de probar: con ella puesta, TODO el mundo ve la
+// versión premium sin licencia, así que no debe quedar activa en un sitio
+// real.
+function kml_map_is_premium() {
+    if ( defined( 'KML_MAP_FORCE_PREMIUM' ) && KML_MAP_FORCE_PREMIUM ) return true;
+    return kml_map_fs()->can_use_premium_code();
+}
 
 // Tamaño de celda (en grados) de la cuadrícula usada para repartir cada capa
 // en varios archivos .json pequeños en vez de uno solo enorme, así construir
@@ -448,7 +517,11 @@ function kml_map_run_analysis( $post_id ) {
     $layers = json_decode( get_post_meta( $post_id, '_kml_layers', true ), true ) ?: [];
     if ( empty( $layers ) ) return;
 
-    $filter_field  = get_post_meta( $post_id, '_kml_filter_field', true ) ?: 'NUM_SOCIO';
+    // Sin campo de filtro configurado (versión gratuita, o premium que aún
+    // no lo ha elegido en "Campos del popup"), no se filtra nada: no tiene
+    // sentido buscar valores de un campo por defecto que puede ni existir
+    // en el KML de quien lo use.
+    $filter_field  = get_post_meta( $post_id, '_kml_filter_field', true ) ?: '';
     $fields        = json_decode( get_post_meta( $post_id, '_kml_fields_available', true ), true ) ?: [];
     $filter_values = json_decode( get_post_meta( $post_id, '_kml_filter_values', true ), true ) ?: [];
     $value_bounds  = json_decode( get_post_meta( $post_id, '_kml_filter_value_bounds', true ), true ) ?: [];
@@ -645,7 +718,12 @@ add_action( 'admin_post_kml_map_add', function () {
     if ( ! current_user_can( 'upload_files' ) ) wp_die( 'Sin permiso.' );
     check_admin_referer( 'kml_map_add' );
 
-    $title = sanitize_text_field( $_POST['map_title'] ?? '' );
+    if ( ! kml_map_is_premium()
+        && wp_count_posts( 'kml_map' )->publish >= KML_MAP_FREE_MAP_LIMIT ) {
+        wp_redirect( admin_url( 'admin.php?page=kml-maps&error=maplimit' ) ); exit;
+    }
+
+    $title = sanitize_text_field( wp_unslash( $_POST['map_title'] ?? '' ) );
     if ( empty( $title ) ) {
         wp_redirect( admin_url( 'admin.php?page=kml-maps&error=notitle' ) ); exit;
     }
@@ -653,8 +731,8 @@ add_action( 'admin_post_kml_map_add', function () {
         wp_redirect( admin_url( 'admin.php?page=kml-maps&error=nofile' ) ); exit;
     }
 
-    $colors  = array_map( 'sanitize_text_field', (array) ( $_POST['kml_colors'] ?? [] ) );
-    $no_fill = (array) ( $_POST['kml_no_fill'] ?? [] );
+    $colors  = array_map( 'sanitize_text_field', wp_unslash( (array) ( $_POST['kml_colors'] ?? [] ) ) );
+    $no_fill = wp_unslash( (array) ( $_POST['kml_no_fill'] ?? [] ) );
     $layers  = kml_map_upload_files( $_FILES['kml_files'], $colors, $no_fill );
     if ( empty( $layers ) ) {
         wp_redirect( admin_url( 'admin.php?page=kml-maps&error=badext' ) ); exit;
@@ -669,7 +747,7 @@ add_action( 'admin_post_kml_map_add', function () {
     update_post_meta( $post_id, '_kml_layers', wp_json_encode( $layers, JSON_UNESCAPED_UNICODE ) );
     update_post_meta( $post_id, '_kml_fields_available', wp_json_encode( [], JSON_UNESCAPED_UNICODE ) );
     update_post_meta( $post_id, '_kml_filter_values', wp_json_encode( [], JSON_UNESCAPED_UNICODE ) );
-    update_post_meta( $post_id, '_kml_filter_values_field', 'NUM_SOCIO' );
+    update_post_meta( $post_id, '_kml_filter_values_field', '' );
 
     // El análisis (bounds, campos, valores de filtro) se hace en segundo
     // plano; hasta que termine, el mapa se ve en el front-end con una vista
@@ -684,6 +762,7 @@ add_action( 'admin_post_kml_map_add', function () {
 // ---------------------------------------------------------------------------
 add_action( 'admin_post_kml_map_add_layers', function () {
     if ( ! current_user_can( 'upload_files' ) ) wp_die( 'Sin permiso.' );
+    if ( ! kml_map_is_premium() ) wp_die( 'Añadir más capas a un mapa existente requiere la versión premium.' );
 
     $map_id = intval( $_POST['map_id'] ?? 0 );
     check_admin_referer( 'kml_map_add_layers_' . $map_id );
@@ -692,8 +771,8 @@ add_action( 'admin_post_kml_map_add_layers', function () {
         wp_redirect( admin_url( 'admin.php?page=kml-maps&error=nofile' ) ); exit;
     }
 
-    $colors     = array_map( 'sanitize_text_field', (array) ( $_POST['kml_colors'] ?? [] ) );
-    $no_fill    = (array) ( $_POST['kml_no_fill'] ?? [] );
+    $colors     = array_map( 'sanitize_text_field', wp_unslash( (array) ( $_POST['kml_colors'] ?? [] ) ) );
+    $no_fill    = wp_unslash( (array) ( $_POST['kml_no_fill'] ?? [] ) );
     $new_layers = kml_map_upload_files( $_FILES['kml_files'], $colors, $no_fill );
     if ( empty( $new_layers ) ) {
         wp_redirect( admin_url( 'admin.php?page=kml-maps&error=badext' ) ); exit;
@@ -715,12 +794,13 @@ add_action( 'admin_post_kml_map_add_layers', function () {
 // ---------------------------------------------------------------------------
 add_action( 'admin_post_kml_map_save_fields', function () {
     if ( ! current_user_can( 'upload_files' ) ) wp_die( 'Sin permiso.' );
+    if ( ! kml_map_is_premium() ) wp_die( 'Configurar los campos del popup requiere la versión premium.' );
 
     $map_id = intval( $_POST['map_id'] ?? 0 );
     check_admin_referer( 'kml_map_save_fields_' . $map_id );
 
-    $visible      = array_map( 'sanitize_text_field', (array) ( $_POST['kml_visible_fields'] ?? [] ) );
-    $filter_field = sanitize_text_field( $_POST['kml_filter_field'] ?? '' );
+    $visible      = array_map( 'sanitize_text_field', wp_unslash( (array) ( $_POST['kml_visible_fields'] ?? [] ) ) );
+    $filter_field = sanitize_text_field( wp_unslash( $_POST['kml_filter_field'] ?? '' ) );
 
     update_post_meta( $map_id, '_kml_fields_visible', wp_json_encode( $visible, JSON_UNESCAPED_UNICODE ) );
     if ( $filter_field ) {
@@ -767,6 +847,32 @@ add_action( 'admin_post_kml_map_set_fill', function () {
     }
 
     wp_redirect( admin_url( 'admin.php?page=kml-maps&saved_fill=1' ) ); exit;
+} );
+
+// ---------------------------------------------------------------------------
+// Acción: cambiar el aspecto (colores) de la caja de filtro y el botón
+// "Limpiar filtro" de un mapa. Función premium.
+// ---------------------------------------------------------------------------
+add_action( 'admin_post_kml_map_set_bar_style', function () {
+    if ( ! current_user_can( 'upload_files' ) ) wp_die( 'Sin permiso.' );
+    if ( ! kml_map_is_premium() ) wp_die( 'Personalizar el aspecto de la caja de filtro requiere la versión premium.' );
+
+    $map_id = intval( $_POST['map_id'] ?? 0 );
+    check_admin_referer( 'kml_map_set_bar_style_' . $map_id );
+
+    $bar_style = [];
+    if ( empty( $_POST['reset'] ) ) {
+        foreach ( [ 'bar_bg', 'bar_text', 'btn_bg', 'btn_text' ] as $key ) {
+            $value = sanitize_hex_color( wp_unslash( $_POST[ $key ] ?? '' ) );
+            if ( $value ) $bar_style[ $key ] = $value;
+        }
+    }
+    // 'reset' marcado: se guarda vacío y todo vuelve a los colores por
+    // defecto de assets/css/map.css.
+
+    update_post_meta( $map_id, '_kml_bar_style', wp_json_encode( $bar_style, JSON_UNESCAPED_UNICODE ) );
+
+    wp_redirect( admin_url( 'admin.php?page=kml-maps&saved_bar_style=1' ) ); exit;
 } );
 
 // ---------------------------------------------------------------------------
@@ -838,7 +944,10 @@ add_shortcode( 'kml_map', function ( $atts ) {
     // elegancia: sin bounds usa una vista de partida (ver fitAll() en el JS)
     // y sin valores de filtro este se va completando según se cargan capas.
     $fields_visible = json_decode( get_post_meta( $post_id, '_kml_fields_visible', true ), true );
-    $filter_field   = get_post_meta( $post_id, '_kml_filter_field', true ) ?: 'NUM_SOCIO';
+    // Vacío por defecto (versión gratuita, o premium sin configurar):
+    // el filtro no aparece hasta que se elige un campo en "Campos del
+    // popup" (función premium).
+    $filter_field   = get_post_meta( $post_id, '_kml_filter_field', true ) ?: '';
 
     $filter_values_field = get_post_meta( $post_id, '_kml_filter_values_field', true );
     $filter_values        = ( $filter_values_field === $filter_field )
@@ -848,14 +957,35 @@ add_shortcode( 'kml_map', function ( $atts ) {
         ? ( json_decode( get_post_meta( $post_id, '_kml_filter_value_bounds', true ), true ) ?: [] )
         : [];
 
+    // Aspecto personalizado de la caja de filtro (función premium, ver
+    // kml_map_set_bar_style); se aplica como variables CSS en el wrapper,
+    // así que si no se ha personalizado nada el CSS usa sus colores de
+    // siempre (ver assets/css/map.css).
+    $bar_style      = json_decode( get_post_meta( $post_id, '_kml_bar_style', true ), true ) ?: [];
+    $bar_style_vars = '';
+    foreach ( [
+        'bar_bg'   => '--kml-bar-bg',
+        'bar_text' => '--kml-bar-text',
+        'btn_bg'   => '--kml-btn-bg',
+        'btn_text' => '--kml-btn-text',
+    ] as $key => $css_var ) {
+        if ( ! empty( $bar_style[ $key ] ) ) {
+            $color = sanitize_hex_color( $bar_style[ $key ] );
+            if ( $color ) $bar_style_vars .= $css_var . ':' . $color . ';';
+        }
+    }
+
+    // Leaflet se sirve empaquetado con el propio plugin (no desde un CDN
+    // externo): un CDN de terceros es un punto de fallo fuera de nuestro
+    // control y WordPress.org no permite cargar librerías de terceros así.
     wp_enqueue_style(
         'leaflet-css',
-        'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
+        KML_MAP_URL . 'assets/vendor/leaflet/leaflet.css',
         [], '1.9.4'
     );
     wp_enqueue_script(
         'leaflet-js',
-        'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
+        KML_MAP_URL . 'assets/vendor/leaflet/leaflet.js',
         [], '1.9.4', true
     );
     wp_enqueue_style(
@@ -881,7 +1011,7 @@ add_shortcode( 'kml_map', function ( $atts ) {
 
     ob_start();
     ?>
-    <div class="kml-map-wrapper" style="height:<?php echo esc_attr( $height ); ?>">
+    <div class="kml-map-wrapper" style="height:<?php echo esc_attr( $height ); ?>;<?php echo esc_attr( $bar_style_vars ); ?>">
         <div class="kml-map-canvas"
              id="<?php echo esc_attr( $uid ); ?>"
              data-kml-layers="<?php echo esc_attr( wp_json_encode( $layers, JSON_UNESCAPED_UNICODE ) ); ?>"
@@ -890,6 +1020,7 @@ add_shortcode( 'kml_map', function ( $atts ) {
              data-kml-filter-values="<?php echo esc_attr( wp_json_encode( $filter_values, JSON_UNESCAPED_UNICODE ) ); ?>"
              data-kml-filter-value-bounds="<?php echo esc_attr( wp_json_encode( $filter_value_bounds, JSON_UNESCAPED_UNICODE ) ); ?>">
         </div>
+        <?php if ( $filter_field ) : ?>
         <div class="kml-map-bar" id="<?php echo esc_attr( $uid ); ?>-bar">
             <div class="kml-filter-group">
                 <span class="kml-filter-label">Filtrar por:</span>
@@ -902,6 +1033,7 @@ add_shortcode( 'kml_map', function ( $atts ) {
                 </button>
             </div>
         </div>
+        <?php endif; ?>
     </div>
     <?php
     return ob_get_clean();
