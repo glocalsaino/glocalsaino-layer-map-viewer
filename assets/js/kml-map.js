@@ -1,4 +1,4 @@
-/* KML Map Viewer v3 – frontend */
+/* KML-Map v3 – frontend */
 ( function () {
     'use strict';
 
@@ -19,6 +19,15 @@
         { stroke: '#01665e', fill: '#35978f' },  // verde azulado
         { stroke: '#9e1f7a', fill: '#e9a3c9' },  // rosa
     ];
+
+    // Textos traducibles: los pone wp_localize_script en KmlMapConfig.i18n
+    // (ver el shortcode en wp-kml-map.php); si por lo que sea no llegaran
+    // (script cargado suelto, fuera de WordPress), se usa el texto en
+    // español de toda la vida como último recurso.
+    var i18n = ( typeof KmlMapConfig !== 'undefined' && KmlMapConfig.i18n ) ? KmlMapConfig.i18n : {};
+    function t( key, fallback ) {
+        return i18n[ key ] || fallback;
+    }
 
     function initAll() {
         document.querySelectorAll( '.kml-map-canvas[data-kml-layers]' ).forEach( function ( el ) {
@@ -53,20 +62,22 @@
         var map = L.map( uid, { zoomControl: true, maxZoom: 22, renderer: L.canvas() } );
 
         // --- Capas base ---
+        // Satélite: Esri World Imagery, un servicio de teselas documentado
+        // para este uso (a diferencia del endpoint no oficial de Google que
+        // se usaba antes, que incumplía sus términos de servicio).
         var osm = L.tileLayer(
             'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
             { attribution: '© OpenStreetMap', maxZoom: 19 }
         );
         var satellite = L.tileLayer(
-            'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-            { attribution: '© Google', maxZoom: 22, maxNativeZoom: 18 }
+            'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            { attribution: 'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community', maxZoom: 19 }
         );
         satellite.addTo( map );
 
-        var baseLayers = {
-            'Satélite (Google)': satellite,
-            'OpenStreetMap': osm
-        };
+        var baseLayers = {};
+        baseLayers[ t( 'satelliteLabel', 'Satélite' ) ] = satellite;
+        baseLayers.OpenStreetMap = osm; // nombre propio, no se traduce
 
         // URL del endpoint que sirve los objetos de una capa por páginas (ver
         // kml_map_rest_get_features en PHP), inyectada por wp_localize_script.
@@ -128,7 +139,7 @@
                 }
                 // Indicar de qué capa viene
                 rows += '<tr><td colspan="2" style="padding:3px 8px;font-size:11px;color:#888;font-style:italic">'
-                    + 'Capa: ' + escHtml( kml.name ) + '</td></tr>';
+                    + t( 'layerLabel', 'Capa:' ) + ' ' + escHtml( kml.name ) + '</td></tr>';
 
                 layer.bindPopup(
                     '<table style="border-collapse:collapse;font-size:13px;font-family:sans-serif">'
@@ -195,10 +206,11 @@
             var messages = [];
             layerData.forEach( function ( ld ) {
                 if ( ld.loading ) {
-                    messages.push(
-                        '⏳ ' + escHtml( ld.name ) + ': cargando objetos… (' + ld.loading.shown
-                        + ' de ' + ld.loading.total + ')'
-                    );
+                    var text = t( 'loadingTemplate', '%1$s: cargando objetos… (%2$s de %3$s)' )
+                        .replace( '%1$s', escHtml( ld.name ) )
+                        .replace( '%2$s', ld.loading.shown )
+                        .replace( '%3$s', ld.loading.total );
+                    messages.push( '⏳ ' + text );
                 }
             } );
 

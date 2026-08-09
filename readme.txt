@@ -1,9 +1,9 @@
-=== KML Map Viewer ===
+=== KML-Map ===
 Contributors: TU_USUARIO_WORDPRESSORG
 Tags: kml, map, leaflet, gis, kmz
 Requires at least: 5.8
 Tested up to: 6.7
-Stable tag: 4.3.0
+Stable tag: 4.4.0
 Requires PHP: 7.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -12,7 +12,7 @@ Sube archivos KML y muéstralos como mapas interactivos con capas de colores y f
 
 == Description ==
 
-KML Map Viewer convierte cualquier archivo KML (el formato que exportan QGIS, Google Earth y la mayoría de programas GIS) en un mapa interactivo insertable en cualquier página o entrada mediante un shortcode.
+KML-Map convierte cualquier archivo KML (el formato que exportan QGIS, Google Earth y la mayoría de programas GIS) en un mapa interactivo insertable en cualquier página o entrada mediante un shortcode.
 
 Pensado desde el principio para archivos KML grandes (decenas de miles de objetos): en vez de hacer que el navegador descargue y procese el archivo entero, el propio plugin lo analiza en segundo plano al subirlo y construye un índice; el visor pide después los objetos al servidor por páginas, sin llegar a congelar la pestaña ni en móviles de gama baja.
 
@@ -67,10 +67,16 @@ Hasta 3 con la versión gratuita. La versión premium permite crear mapas ilimit
 
 == Screenshots ==
 
-1. Mapa con varias capas KML y filtro por campo.
-2. Panel de administración: creación de un mapa y gestión de capas.
+1. Mapa interactivo en el front-end, con varias capas y filtro por campo.
+2. Panel de administración: formulario de creación de un mapa y listado de un mapa ya creado.
+3. Panel de administración: funciones premium desplegadas (añadir más capas, campos del popup y aspecto de la caja de filtro).
 
 == Changelog ==
+
+= 4.4.0 =
+* Internacionalización: todos los textos del plugin (admin y front-end) son ahora traducibles.
+* La capa de satélite pasa de un endpoint no documentado de Google a Esri World Imagery, con términos de uso claros para este caso.
+* Plugin renombrado a "KML-Map".
 
 = 4.3.0 =
 * Límite de 3 mapas en la versión gratuita (ilimitados en premium).
@@ -96,6 +102,9 @@ Hasta 3 con la versión gratuita. La versión premium permite crear mapas ilimit
 * Análisis en segundo plano (WP-Cron) para no bloquear la subida de archivos grandes.
 
 == Upgrade Notice ==
+
+= 4.4.0 =
+La capa de satélite pasa de Google a Esri World Imagery: mismo uso, la imagen puede variar ligeramente según la zona.
 
 = 4.3.0 =
 Si tenías el filtro funcionando por el campo "NUM_SOCIO" por defecto sin haberlo elegido tú, tras esta actualización deja de mostrarse; actívalo de nuevo en "Campos del popup" (función premium).

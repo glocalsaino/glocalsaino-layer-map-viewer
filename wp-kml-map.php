@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name:       KML Map Viewer
+ * Plugin Name:       KML-Map
  * Description:       Sube uno o varios archivos KML y muestra mapas interactivos con capas de colores y filtro por campo configurable.
- * Version:           4.3.0
+ * Version:           4.4.0
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            Glocal Saino
@@ -13,7 +13,7 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'KML_MAP_VERSION', '4.3.0' );
+define( 'KML_MAP_VERSION', '4.4.0' );
 define( 'KML_MAP_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'KML_MAP_URL',     plugin_dir_url( __FILE__ ) );
 
@@ -125,8 +125,8 @@ add_action( 'init', function () {
 // ---------------------------------------------------------------------------
 add_action( 'admin_menu', function () {
     add_menu_page(
-        'Mapas KML',
-        'Mapas KML',
+        __( 'Mapas KML', 'kml-map' ),
+        __( 'Mapas KML', 'kml-map' ),
         'upload_files',
         'kml-maps',
         function () { include KML_MAP_DIR . 'admin/admin-page.php'; },
@@ -715,7 +715,7 @@ function kml_map_rest_get_features( WP_REST_Request $req ) {
 // Acción: crear nuevo mapa (con uno o varios KML)
 // ---------------------------------------------------------------------------
 add_action( 'admin_post_kml_map_add', function () {
-    if ( ! current_user_can( 'upload_files' ) ) wp_die( 'Sin permiso.' );
+    if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'Sin permiso.', 'kml-map' ) );
     check_admin_referer( 'kml_map_add' );
 
     if ( ! kml_map_is_premium()
@@ -761,8 +761,8 @@ add_action( 'admin_post_kml_map_add', function () {
 // Acción: añadir más capas KML a un mapa existente
 // ---------------------------------------------------------------------------
 add_action( 'admin_post_kml_map_add_layers', function () {
-    if ( ! current_user_can( 'upload_files' ) ) wp_die( 'Sin permiso.' );
-    if ( ! kml_map_is_premium() ) wp_die( 'Añadir más capas a un mapa existente requiere la versión premium.' );
+    if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'Sin permiso.', 'kml-map' ) );
+    if ( ! kml_map_is_premium() ) wp_die( esc_html__( 'Añadir más capas a un mapa existente requiere la versión premium.', 'kml-map' ) );
 
     $map_id = intval( $_POST['map_id'] ?? 0 );
     check_admin_referer( 'kml_map_add_layers_' . $map_id );
@@ -793,8 +793,8 @@ add_action( 'admin_post_kml_map_add_layers', function () {
 // Acción: guardar campos visibles en el popup
 // ---------------------------------------------------------------------------
 add_action( 'admin_post_kml_map_save_fields', function () {
-    if ( ! current_user_can( 'upload_files' ) ) wp_die( 'Sin permiso.' );
-    if ( ! kml_map_is_premium() ) wp_die( 'Configurar los campos del popup requiere la versión premium.' );
+    if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'Sin permiso.', 'kml-map' ) );
+    if ( ! kml_map_is_premium() ) wp_die( esc_html__( 'Configurar los campos del popup requiere la versión premium.', 'kml-map' ) );
 
     $map_id = intval( $_POST['map_id'] ?? 0 );
     check_admin_referer( 'kml_map_save_fields_' . $map_id );
@@ -819,7 +819,7 @@ add_action( 'admin_post_kml_map_save_fields', function () {
 // Acción: forzar el análisis ahora mismo (por si WP-Cron no se dispara solo)
 // ---------------------------------------------------------------------------
 add_action( 'admin_post_kml_map_analyze_now', function () {
-    if ( ! current_user_can( 'upload_files' ) ) wp_die( 'Sin permiso.' );
+    if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'Sin permiso.', 'kml-map' ) );
 
     $map_id = intval( $_GET['map_id'] ?? 0 );
     check_admin_referer( 'kml_map_analyze_now_' . $map_id );
@@ -833,7 +833,7 @@ add_action( 'admin_post_kml_map_analyze_now', function () {
 // Acción: cambiar si una capa existente se pinta rellena o solo el borde
 // ---------------------------------------------------------------------------
 add_action( 'admin_post_kml_map_set_fill', function () {
-    if ( ! current_user_can( 'upload_files' ) ) wp_die( 'Sin permiso.' );
+    if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'Sin permiso.', 'kml-map' ) );
 
     $map_id = intval( $_POST['map_id'] ?? 0 );
     $idx    = intval( $_POST['layer_idx'] ?? -1 );
@@ -854,8 +854,8 @@ add_action( 'admin_post_kml_map_set_fill', function () {
 // "Limpiar filtro" de un mapa. Función premium.
 // ---------------------------------------------------------------------------
 add_action( 'admin_post_kml_map_set_bar_style', function () {
-    if ( ! current_user_can( 'upload_files' ) ) wp_die( 'Sin permiso.' );
-    if ( ! kml_map_is_premium() ) wp_die( 'Personalizar el aspecto de la caja de filtro requiere la versión premium.' );
+    if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'Sin permiso.', 'kml-map' ) );
+    if ( ! kml_map_is_premium() ) wp_die( esc_html__( 'Personalizar el aspecto de la caja de filtro requiere la versión premium.', 'kml-map' ) );
 
     $map_id = intval( $_POST['map_id'] ?? 0 );
     check_admin_referer( 'kml_map_set_bar_style_' . $map_id );
@@ -879,7 +879,7 @@ add_action( 'admin_post_kml_map_set_bar_style', function () {
 // Acción: eliminar una capa individual de un mapa
 // ---------------------------------------------------------------------------
 add_action( 'admin_post_kml_map_del_layer', function () {
-    if ( ! current_user_can( 'upload_files' ) ) wp_die( 'Sin permiso.' );
+    if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'Sin permiso.', 'kml-map' ) );
 
     $map_id = intval( $_GET['map_id'] ?? 0 );
     $idx    = intval( $_GET['layer_idx'] ?? -1 );
@@ -905,7 +905,7 @@ add_action( 'admin_post_kml_map_del_layer', function () {
 // Acción: eliminar mapa completo
 // ---------------------------------------------------------------------------
 add_action( 'admin_post_kml_map_delete', function () {
-    if ( ! current_user_can( 'upload_files' ) ) wp_die( 'Sin permiso.' );
+    if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'Sin permiso.', 'kml-map' ) );
 
     $id = intval( $_GET['id'] ?? 0 );
     check_admin_referer( 'kml_map_delete_' . $id );
@@ -1003,6 +1003,15 @@ add_shortcode( 'kml_map', function ( $atts ) {
     // índice espacial que se genera en segundo plano tras la subida.
     wp_localize_script( 'kml-map-js', 'KmlMapConfig', [
         'restUrl' => esc_url_raw( rest_url( 'kml-map/v1/features' ) ),
+        // Textos del JS (ver assets/js/kml-map.js): así se pueden traducir
+        // igual que el resto del plugin, sin depender de generar archivos
+        // .json de traducción por script (wp_set_script_translations).
+        'i18n'    => [
+            'satelliteLabel'  => __( 'Satélite', 'kml-map' ),
+            'layerLabel'      => __( 'Capa:', 'kml-map' ),
+            /* translators: 1: nombre de la capa, 2: objetos cargados, 3: objetos totales */
+            'loadingTemplate' => __( '%1$s: cargando objetos… (%2$s de %3$s)', 'kml-map' ),
+        ],
     ] );
 
     static $instance = 0;
@@ -1023,13 +1032,13 @@ add_shortcode( 'kml_map', function ( $atts ) {
         <?php if ( $filter_field ) : ?>
         <div class="kml-map-bar" id="<?php echo esc_attr( $uid ); ?>-bar">
             <div class="kml-filter-group">
-                <span class="kml-filter-label">Filtrar por:</span>
+                <span class="kml-filter-label"><?php esc_html_e( 'Filtrar por:', 'kml-map' ); ?></span>
                 <select class="kml-filter-select"
                         id="<?php echo esc_attr( $uid ); ?>-sel"
                         multiple size="4"></select>
                 <button class="kml-clear-btn"
                         id="<?php echo esc_attr( $uid ); ?>-clear">
-                    &#x2715; Limpiar filtro
+                    &#x2715; <?php esc_html_e( 'Limpiar filtro', 'kml-map' ); ?>
                 </button>
             </div>
         </div>
