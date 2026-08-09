@@ -51,6 +51,9 @@ $palette = [
     <?php if ( isset( $_GET['analyzed'] ) ) : ?>
         <div class="notice notice-success is-dismissible"><p>✔ Análisis completado.</p></div>
     <?php endif; ?>
+    <?php if ( isset( $_GET['saved_fill'] ) ) : ?>
+        <div class="notice notice-success is-dismissible"><p>✔ Relleno actualizado.</p></div>
+    <?php endif; ?>
     <?php if ( isset( $_GET['error'] ) ) : ?>
         <div class="notice notice-error is-dismissible">
             <p>Error: <?php echo esc_html( $errors[ $_GET['error'] ] ?? $_GET['error'] ); ?></p>
@@ -87,7 +90,7 @@ $palette = [
                         </div>
                         <p class="description">
                             Puedes seleccionar varios archivos a la vez (Ctrl+clic o Cmd+clic).<br>
-                            Elige el color de cada capa antes de subir.<br>
+                            Elige el color de cada capa antes de subir; marca "Solo borde" para que se vea sin relleno.<br>
                             Tamaño máximo de subida: <strong><?php echo esc_html( $max_upload_size ); ?></strong> por archivo.
                         </p>
                     </td>
@@ -194,6 +197,7 @@ $palette = [
                                 <th style="padding:4px 8px;width:18px">Color</th>
                                 <th style="padding:4px 8px">Nombre de capa</th>
                                 <th style="padding:4px 8px">Archivo</th>
+                                <th style="padding:4px 8px;width:150px">Relleno</th>
                                 <th style="padding:4px 8px;width:90px"></th>
                             </tr>
                         </thead>
@@ -202,13 +206,14 @@ $palette = [
                             $color = ! empty( $layer['color'] )
                                 ? $layer['color']
                                 : $palette[ $idx % count( $palette ) ];
+                            $fill  = isset( $layer['fill'] ) ? (bool) $layer['fill'] : true;
                         ?>
                             <tr style="border-bottom:1px solid #f0f0f0">
                                 <td style="padding:6px 8px;color:#999;font-size:12px"><?php echo $idx + 1; ?></td>
                                 <td style="padding:6px 8px">
                                     <span style="display:inline-block;width:16px;height:16px;
-                                                 background:<?php echo esc_attr($color); ?>;
-                                                 border-radius:3px;border:1px solid rgba(0,0,0,0.2)"></span>
+                                                 background:<?php echo $fill ? esc_attr( $color ) : 'transparent'; ?>;
+                                                 border-radius:3px;border:2px solid <?php echo esc_attr( $color ); ?>"></span>
                                 </td>
                                 <td style="padding:6px 8px;font-weight:500">
                                     <?php echo esc_html( $layer['name'] ); ?>
@@ -220,6 +225,21 @@ $palette = [
                                 </td>
                                 <td style="padding:6px 8px;font-size:12px;color:#666">
                                     <?php echo esc_html( basename( $layer['url'] ) ); ?>
+                                </td>
+                                <td style="padding:6px 8px">
+                                    <form method="post"
+                                          action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"
+                                          style="display:flex;align-items:center;gap:4px">
+                                        <?php wp_nonce_field( 'kml_map_set_fill_' . $map->ID . '_' . $idx ); ?>
+                                        <input type="hidden" name="action" value="kml_map_set_fill">
+                                        <input type="hidden" name="map_id" value="<?php echo $map->ID; ?>">
+                                        <input type="hidden" name="layer_idx" value="<?php echo $idx; ?>">
+                                        <label style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer;white-space:nowrap">
+                                            <input type="checkbox" name="no_fill" value="1" <?php checked( ! $fill ); ?>>
+                                            Solo borde
+                                        </label>
+                                        <button type="submit" class="button button-small">OK</button>
+                                    </form>
                                 </td>
                                 <td style="padding:6px 8px">
                                     <a href="<?php echo esc_url( wp_nonce_url(
@@ -258,7 +278,7 @@ $palette = [
                                 <div class="kml-color-pickers"></div>
                             </div>
                             <p class="description" style="margin:6px 0 10px">
-                                Puedes seleccionar varios archivos. Elige el color de cada capa antes de subir.<br>
+                                Puedes seleccionar varios archivos. Elige el color de cada capa antes de subir; marca "Solo borde" para que se vea sin relleno.<br>
                                 Tamaño máximo de subida: <strong><?php echo esc_html( $max_upload_size ); ?></strong> por archivo.
                             </p>
                             <button type="submit" class="button button-primary">Añadir capas</button>
@@ -347,7 +367,8 @@ $palette = [
 
         var header = document.createElement('tr');
         header.innerHTML = '<th style="padding:4px 12px 4px 0;color:#777;font-weight:normal;text-align:left">Archivo</th>'
-                         + '<th style="padding:4px 0;color:#777;font-weight:normal;text-align:left">Color de capa</th>';
+                         + '<th style="padding:4px 12px 4px 0;color:#777;font-weight:normal;text-align:left">Color de capa</th>'
+                         + '<th style="padding:4px 0;color:#777;font-weight:normal;text-align:left">Relleno</th>';
         table.appendChild(header);
 
         for (var i = 0; i < files.length; i++) {
@@ -355,9 +376,14 @@ $palette = [
             var color = PALETTE[i % PALETTE.length];
             var tr    = document.createElement('tr');
             tr.innerHTML = '<td style="padding:5px 12px 5px 0">' + escHtml(name) + '</td>'
-                         + '<td style="padding:5px 0">'
+                         + '<td style="padding:5px 12px 5px 0">'
                          + '<input type="color" name="kml_colors[]" value="' + color + '" '
                          + 'style="width:48px;height:30px;border:1px solid #ccc;border-radius:3px;cursor:pointer;vertical-align:middle">'
+                         + '</td>'
+                         + '<td style="padding:5px 0;white-space:nowrap">'
+                         + '<label style="display:flex;align-items:center;gap:4px;cursor:pointer">'
+                         + '<input type="checkbox" name="kml_no_fill[' + i + ']" value="1"> Solo borde'
+                         + '</label>'
                          + '</td>';
             table.appendChild(tr);
         }

@@ -2,14 +2,14 @@
 /**
  * Plugin Name: KML Map Viewer
  * Description: Sube uno o varios archivos KML y muestra mapas interactivos con capas de colores y filtro por NUM_SOCIO.
- * Version:     4.0.0
+ * Version:     4.1.0
  * Author:      Glocal Saino
  * Text Domain: kml-map
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'KML_MAP_VERSION', '4.0.0' );
+define( 'KML_MAP_VERSION', '4.1.0' );
 define( 'KML_MAP_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'KML_MAP_URL',     plugin_dir_url( __FILE__ ) );
 
@@ -22,7 +22,7 @@ define( 'KML_MAP_TILE_CELL_SIZE', 0.05 );
 // Subir este número fuerza a reconstruir en segundo plano el índice de todas
 // las capas ya analizadas con un formato antiguo, sin depender de que
 // alguien pulse "Analizar ahora" a mano.
-define( 'KML_MAP_TILE_SCHEMA_VERSION', 3 );
+define( 'KML_MAP_TILE_SCHEMA_VERSION', 4 );
 
 // ---------------------------------------------------------------------------
 // Permitir archivos KML en WordPress
@@ -358,7 +358,7 @@ function kml_map_build_feature_index( $path, $out_dir, $filter_field = '' ) {
     libxml_use_internal_errors( $prev_use_errors );
 
     foreach ( $cells as $key => $features ) {
-        file_put_contents( trailingslashit( $out_dir ) . $key . '.json', wp_json_encode( $features ) );
+        file_put_contents( trailingslashit( $out_dir ) . $key . '.json', wp_json_encode( $features, JSON_UNESCAPED_UNICODE ) );
     }
 
     file_put_contents( trailingslashit( $out_dir ) . '.schema', (string) KML_MAP_TILE_SCHEMA_VERSION );
@@ -373,7 +373,7 @@ function kml_map_build_feature_index( $path, $out_dir, $filter_field = '' ) {
 // al instante sin importar cuántos objetos tenga el KML, y sin depender de
 // los límites de tiempo de ejecución del servidor.
 // ---------------------------------------------------------------------------
-function kml_map_upload_files( $files_array, $colors = [] ) {
+function kml_map_upload_files( $files_array, $colors = [], $no_fill = [] ) {
     require_once ABSPATH . 'wp-admin/includes/file.php';
 
     $layers      = [];
@@ -405,6 +405,7 @@ function kml_map_upload_files( $files_array, $colors = [] ) {
             'url'      => esc_url_raw( $upload['url'] ),
             'name'     => pathinfo( $files_array['name'][ $i ], PATHINFO_FILENAME ),
             'color'    => $color,
+            'fill'     => empty( $no_fill[ $color_index ] ),
             'bounds'   => null,
             'analyzed' => false,
         ];
@@ -497,17 +498,17 @@ function kml_map_run_analysis( $post_id ) {
         // Se guarda el progreso capa a capa: si el proceso se interrumpiera a
         // mitad (otro límite de tiempo, aunque mucho más generoso aquí), no
         // se pierde lo ya analizado y se retoma donde quedó.
-        update_post_meta( $post_id, '_kml_layers', wp_json_encode( $layers ) );
-        update_post_meta( $post_id, '_kml_fields_available', wp_json_encode( $fields ) );
+        update_post_meta( $post_id, '_kml_layers', wp_json_encode( $layers, JSON_UNESCAPED_UNICODE ) );
+        update_post_meta( $post_id, '_kml_fields_available', wp_json_encode( $fields, JSON_UNESCAPED_UNICODE ) );
         if ( ! get_post_meta( $post_id, '_kml_fields_visible', true ) ) {
-            update_post_meta( $post_id, '_kml_fields_visible', wp_json_encode( $fields ) );
+            update_post_meta( $post_id, '_kml_fields_visible', wp_json_encode( $fields, JSON_UNESCAPED_UNICODE ) );
         }
 
         $sorted_values = $filter_values;
         sort( $sorted_values, SORT_NATURAL );
-        update_post_meta( $post_id, '_kml_filter_values', wp_json_encode( $sorted_values ) );
+        update_post_meta( $post_id, '_kml_filter_values', wp_json_encode( $sorted_values, JSON_UNESCAPED_UNICODE ) );
         update_post_meta( $post_id, '_kml_filter_values_field', $filter_field );
-        update_post_meta( $post_id, '_kml_filter_value_bounds', wp_json_encode( $value_bounds ) );
+        update_post_meta( $post_id, '_kml_filter_value_bounds', wp_json_encode( $value_bounds, JSON_UNESCAPED_UNICODE ) );
     }
 }
 
@@ -519,31 +520,37 @@ function kml_map_run_analysis( $post_id ) {
 // si ya está todo al día.
 // ---------------------------------------------------------------------------
 function kml_map_ensure_layers_queued( $post_id, $layers, $filter_field ) {
-    $needs_queue = false;
+    $needs_queue    = false;
+    $tiles_outdated = false;
 
     foreach ( $layers as $idx => $layer ) {
-        $tiles_outdated = ! kml_map_tile_index_current( kml_map_tile_dir( $layer['url'] ) );
-        if ( empty( $layer['analyzed'] ) || $tiles_outdated ) {
+        $layer_outdated = ! kml_map_tile_index_current( kml_map_tile_dir( $layer['url'] ) );
+        if ( $layer_outdated ) $tiles_outdated = true;
+        if ( empty( $layer['analyzed'] ) || $layer_outdated ) {
             $layers[ $idx ]['analyzed'] = false;
             $needs_queue = true;
         }
     }
 
     $filter_values_field = get_post_meta( $post_id, '_kml_filter_values_field', true );
-    if ( $filter_values_field !== $filter_field ) {
-        // El campo de filtro cambió (o nunca se calculó): hace falta
-        // reanalizar todas las capas para recoger sus valores.
+
+    // El campo de filtro cambió (o nunca se calculó), o el índice espacial
+    // está en un formato antiguo: en ambos casos los valores de filtro ya
+    // guardados no sirven (los del formato antiguo podrían venir con
+    // acentos/eñes corruptos de una versión previa del plugin) y hay que
+    // recalcularlos desde cero para toda la capa, no solo acumular encima.
+    if ( $filter_values_field !== $filter_field || $tiles_outdated ) {
         foreach ( $layers as $idx => $layer ) {
             $layers[ $idx ]['analyzed'] = false;
         }
-        update_post_meta( $post_id, '_kml_filter_values', wp_json_encode( [] ) );
+        update_post_meta( $post_id, '_kml_filter_values', wp_json_encode( [], JSON_UNESCAPED_UNICODE ) );
         update_post_meta( $post_id, '_kml_filter_values_field', $filter_field );
-        update_post_meta( $post_id, '_kml_filter_value_bounds', wp_json_encode( [] ) );
+        update_post_meta( $post_id, '_kml_filter_value_bounds', wp_json_encode( [], JSON_UNESCAPED_UNICODE ) );
         $needs_queue = true;
     }
 
     if ( $needs_queue ) {
-        update_post_meta( $post_id, '_kml_layers', wp_json_encode( $layers ) );
+        update_post_meta( $post_id, '_kml_layers', wp_json_encode( $layers, JSON_UNESCAPED_UNICODE ) );
         kml_map_schedule_analysis( $post_id );
     }
 
@@ -646,8 +653,9 @@ add_action( 'admin_post_kml_map_add', function () {
         wp_redirect( admin_url( 'admin.php?page=kml-maps&error=nofile' ) ); exit;
     }
 
-    $colors = array_map( 'sanitize_text_field', (array) ( $_POST['kml_colors'] ?? [] ) );
-    $layers = kml_map_upload_files( $_FILES['kml_files'], $colors );
+    $colors  = array_map( 'sanitize_text_field', (array) ( $_POST['kml_colors'] ?? [] ) );
+    $no_fill = (array) ( $_POST['kml_no_fill'] ?? [] );
+    $layers  = kml_map_upload_files( $_FILES['kml_files'], $colors, $no_fill );
     if ( empty( $layers ) ) {
         wp_redirect( admin_url( 'admin.php?page=kml-maps&error=badext' ) ); exit;
     }
@@ -658,9 +666,9 @@ add_action( 'admin_post_kml_map_add', function () {
         'post_status' => 'publish',
     ] );
 
-    update_post_meta( $post_id, '_kml_layers', wp_json_encode( $layers ) );
-    update_post_meta( $post_id, '_kml_fields_available', wp_json_encode( [] ) );
-    update_post_meta( $post_id, '_kml_filter_values', wp_json_encode( [] ) );
+    update_post_meta( $post_id, '_kml_layers', wp_json_encode( $layers, JSON_UNESCAPED_UNICODE ) );
+    update_post_meta( $post_id, '_kml_fields_available', wp_json_encode( [], JSON_UNESCAPED_UNICODE ) );
+    update_post_meta( $post_id, '_kml_filter_values', wp_json_encode( [], JSON_UNESCAPED_UNICODE ) );
     update_post_meta( $post_id, '_kml_filter_values_field', 'NUM_SOCIO' );
 
     // El análisis (bounds, campos, valores de filtro) se hace en segundo
@@ -685,14 +693,15 @@ add_action( 'admin_post_kml_map_add_layers', function () {
     }
 
     $colors     = array_map( 'sanitize_text_field', (array) ( $_POST['kml_colors'] ?? [] ) );
-    $new_layers = kml_map_upload_files( $_FILES['kml_files'], $colors );
+    $no_fill    = (array) ( $_POST['kml_no_fill'] ?? [] );
+    $new_layers = kml_map_upload_files( $_FILES['kml_files'], $colors, $no_fill );
     if ( empty( $new_layers ) ) {
         wp_redirect( admin_url( 'admin.php?page=kml-maps&error=badext' ) ); exit;
     }
 
     $existing = json_decode( get_post_meta( $map_id, '_kml_layers', true ), true ) ?: [];
     $merged   = array_merge( $existing, $new_layers );
-    update_post_meta( $map_id, '_kml_layers', wp_json_encode( $merged ) );
+    update_post_meta( $map_id, '_kml_layers', wp_json_encode( $merged, JSON_UNESCAPED_UNICODE ) );
 
     // Las capas nuevas se suben sin analizar (bounds/campos/filtro); el
     // análisis se hace en segundo plano.
@@ -713,7 +722,7 @@ add_action( 'admin_post_kml_map_save_fields', function () {
     $visible      = array_map( 'sanitize_text_field', (array) ( $_POST['kml_visible_fields'] ?? [] ) );
     $filter_field = sanitize_text_field( $_POST['kml_filter_field'] ?? '' );
 
-    update_post_meta( $map_id, '_kml_fields_visible', wp_json_encode( $visible ) );
+    update_post_meta( $map_id, '_kml_fields_visible', wp_json_encode( $visible, JSON_UNESCAPED_UNICODE ) );
     if ( $filter_field ) {
         update_post_meta( $map_id, '_kml_filter_field', $filter_field );
 
@@ -741,6 +750,26 @@ add_action( 'admin_post_kml_map_analyze_now', function () {
 } );
 
 // ---------------------------------------------------------------------------
+// Acción: cambiar si una capa existente se pinta rellena o solo el borde
+// ---------------------------------------------------------------------------
+add_action( 'admin_post_kml_map_set_fill', function () {
+    if ( ! current_user_can( 'upload_files' ) ) wp_die( 'Sin permiso.' );
+
+    $map_id = intval( $_POST['map_id'] ?? 0 );
+    $idx    = intval( $_POST['layer_idx'] ?? -1 );
+    check_admin_referer( 'kml_map_set_fill_' . $map_id . '_' . $idx );
+
+    $layers = json_decode( get_post_meta( $map_id, '_kml_layers', true ), true ) ?: [];
+
+    if ( isset( $layers[ $idx ] ) ) {
+        $layers[ $idx ]['fill'] = empty( $_POST['no_fill'] );
+        update_post_meta( $map_id, '_kml_layers', wp_json_encode( $layers, JSON_UNESCAPED_UNICODE ) );
+    }
+
+    wp_redirect( admin_url( 'admin.php?page=kml-maps&saved_fill=1' ) ); exit;
+} );
+
+// ---------------------------------------------------------------------------
 // Acción: eliminar una capa individual de un mapa
 // ---------------------------------------------------------------------------
 add_action( 'admin_post_kml_map_del_layer', function () {
@@ -760,7 +789,7 @@ add_action( 'admin_post_kml_map_del_layer', function () {
         kml_map_delete_dir_recursive( kml_map_tile_dir( $layers[ $idx ]['url'] ) );
 
         array_splice( $layers, $idx, 1 );
-        update_post_meta( $map_id, '_kml_layers', wp_json_encode( array_values( $layers ) ) );
+        update_post_meta( $map_id, '_kml_layers', wp_json_encode( array_values( $layers ), JSON_UNESCAPED_UNICODE ) );
     }
 
     wp_redirect( admin_url( 'admin.php?page=kml-maps&deleted_layer=1' ) ); exit;
@@ -855,11 +884,11 @@ add_shortcode( 'kml_map', function ( $atts ) {
     <div class="kml-map-wrapper" style="height:<?php echo esc_attr( $height ); ?>">
         <div class="kml-map-canvas"
              id="<?php echo esc_attr( $uid ); ?>"
-             data-kml-layers="<?php echo esc_attr( wp_json_encode( $layers ) ); ?>"
-             data-kml-fields="<?php echo esc_attr( wp_json_encode( $fields_visible ) ); ?>"
+             data-kml-layers="<?php echo esc_attr( wp_json_encode( $layers, JSON_UNESCAPED_UNICODE ) ); ?>"
+             data-kml-fields="<?php echo esc_attr( wp_json_encode( $fields_visible, JSON_UNESCAPED_UNICODE ) ); ?>"
              data-kml-filter-field="<?php echo esc_attr( $filter_field ); ?>"
-             data-kml-filter-values="<?php echo esc_attr( wp_json_encode( $filter_values ) ); ?>"
-             data-kml-filter-value-bounds="<?php echo esc_attr( wp_json_encode( $filter_value_bounds ) ); ?>">
+             data-kml-filter-values="<?php echo esc_attr( wp_json_encode( $filter_values, JSON_UNESCAPED_UNICODE ) ); ?>"
+             data-kml-filter-value-bounds="<?php echo esc_attr( wp_json_encode( $filter_value_bounds, JSON_UNESCAPED_UNICODE ) ); ?>">
         </div>
         <div class="kml-map-bar" id="<?php echo esc_attr( $uid ); ?>-bar">
             <div class="kml-filter-group">

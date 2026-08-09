@@ -94,13 +94,19 @@
             var palette      = COLORS[ i % COLORS.length ];
             var fillColor    = ( kml.color && kml.color.length === 7 ) ? kml.color         : palette.fill;
             var strokeColor  = ( kml.color && kml.color.length === 7 ) ? darken(kml.color, 0.3) : palette.stroke;
+            // Ausente (capas creadas antes de esta opción) se trata como
+            // "con relleno", igual que se veían hasta ahora.
+            var hasFill      = ( kml.fill === undefined ) || !!kml.fill;
 
             function style() {
                 return {
                     color:       strokeColor,
                     weight:      1.5,
                     fillColor:   fillColor,
-                    fillOpacity: 0.6
+                    // fillOpacity a 0 en vez de fill:false: el interior
+                    // sigue siendo clicable para abrir el popup aunque no
+                    // se pinte, solo se ve el borde.
+                    fillOpacity: hasFill ? 0.6 : 0
                 };
             }
 
