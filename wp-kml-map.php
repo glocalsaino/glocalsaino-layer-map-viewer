@@ -30,11 +30,7 @@ define( 'KML_MAP_FREE_MAP_LIMIT', 3 );
 // elegir qué campos mostrar, personalizar el aspecto) o crear más de 3
 // mapas requiere una licencia activa.
 //
-// IMPORTANTE: 'id' y 'public_key' son de ejemplo. Hay que sustituirlos por
-// los que da el panel de Freemius al crear el producto (freemius.com), o el
-// SDK se queda inactivo (kml_map_fs()->can_use_premium_code() se comporta
-// como si no hubiera premium, así que las funciones de pago no aparecen ni
-// se pueden activar hasta que se rellenen estos datos reales).
+// 'id' y 'public_key' son los reales del producto "KML-Map" en Freemius.
 // ---------------------------------------------------------------------------
 if ( ! function_exists( 'kml_map_fs' ) ) {
     function kml_map_fs() {
@@ -44,18 +40,28 @@ if ( ! function_exists( 'kml_map_fs' ) ) {
             require_once KML_MAP_DIR . 'freemius/start.php';
 
             $kml_map_fs = fs_dynamic_init( [
-                'id'                  => '0000',                                       // TODO: Plugin ID real de Freemius
-                'slug'                => 'kml-map',                                     // TODO: debe coincidir con el slug final en WordPress.org y con el Text Domain de arriba
+                'id'                  => '36798',
+                'slug'                => 'kml-map',
                 'type'                => 'plugin',
-                'public_key'          => 'pk_00000000000000000000000000000',            // TODO: clave pública real de Freemius
+                'public_key'          => 'pk_0963cea084a31793bc106ef8ea5e8',
+                // false SIEMPRE en este paquete: es el único código que
+                // existe (gratis y premium comparten el mismo zip), así que
+                // debe identificarse como "no premium" y dejar que
+                // can_use_premium_code() decida según la licencia activa.
+                // Ponerlo a true desbloquearía las funciones premium para
+                // todo el mundo sin licencia.
                 'is_premium'          => false,
-                'premium_suffix'      => 'Premium',
+                'premium_suffix'      => 'Pro',
                 'has_premium_version' => true,
                 'has_addons'          => false,
                 'has_paid_plans'      => true,
+                'is_org_compliant'    => true,
+                'trial'               => [
+                    'days'               => 7,
+                    'is_require_payment' => false,
+                ],
                 'menu'                => [
-                    'slug'    => 'kml-maps',
-                    'support' => false,
+                    'slug' => 'kml-maps',
                 ],
             ] );
         }
