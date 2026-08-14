@@ -1,4 +1,4 @@
-/* KML-Map v3 – frontend */
+/* GlocalSaino Layer Map Viewer – frontend */
 ( function () {
     'use strict';
 
@@ -20,11 +20,11 @@
         { stroke: '#9e1f7a', fill: '#e9a3c9' },  // rosa
     ];
 
-    // Textos traducibles: los pone wp_localize_script en KmlMapConfig.i18n
-    // (ver el shortcode en wp-kml-map.php); si por lo que sea no llegaran
+    // Textos traducibles: los pone wp_localize_script en GlocalSainoMapConfig.i18n
+    // (ver el shortcode en glocalsaino-layer-map-viewer.php); si por lo que sea no llegaran
     // (script cargado suelto, fuera de WordPress), se usa el texto en
     // español de toda la vida como último recurso.
-    var i18n = ( typeof KmlMapConfig !== 'undefined' && KmlMapConfig.i18n ) ? KmlMapConfig.i18n : {};
+    var i18n = ( typeof GlocalSainoMapConfig !== 'undefined' && GlocalSainoMapConfig.i18n ) ? GlocalSainoMapConfig.i18n : {};
     function t( key, fallback ) {
         return i18n[ key ] || fallback;
     }
@@ -81,7 +81,7 @@
 
         // URL del endpoint que sirve los objetos de una capa por páginas (ver
         // kml_map_rest_get_features en PHP), inyectada por wp_localize_script.
-        var restUrl = ( typeof KmlMapConfig !== 'undefined' && KmlMapConfig.restUrl ) ? KmlMapConfig.restUrl : null;
+        var restUrl = ( typeof GlocalSainoMapConfig !== 'undefined' && GlocalSainoMapConfig.restUrl ) ? GlocalSainoMapConfig.restUrl : null;
 
         // --- Definir cada capa KML ---
         // El bounding box de cada capa lo calcula el servidor al analizarla
@@ -108,6 +108,9 @@
             // Ausente (capas creadas antes de esta opción) se trata como
             // "con relleno", igual que se veían hasta ahora.
             var hasFill      = ( kml.fill === undefined ) || !!kml.fill;
+            // Ausente (capas creadas antes de poder elegir transparencia):
+            // mismo 0.6 que se usaba fijo hasta ahora.
+            var fillOpacity  = ( typeof kml.opacity === 'number' ) ? kml.opacity : 0.6;
 
             function style() {
                 return {
@@ -117,7 +120,7 @@
                     // fillOpacity a 0 en vez de fill:false: el interior
                     // sigue siendo clicable para abrir el popup aunque no
                     // se pinte, solo se ve el borde.
-                    fillOpacity: hasFill ? 0.6 : 0
+                    fillOpacity: hasFill ? fillOpacity : 0
                 };
             }
 

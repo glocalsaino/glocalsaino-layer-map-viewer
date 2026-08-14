@@ -1,113 +1,105 @@
-=== KML-Map ===
-Contributors: TU_USUARIO_WORDPRESSORG
+=== GlocalSaino Layer Map Viewer ===
+Contributors: glocalsaino
 Tags: kml, map, leaflet, gis, kmz
 Requires at least: 5.8
-Tested up to: 6.7
-Stable tag: 4.4.0
+Tested up to: 7.0
+Stable tag: 5.0.3
 Requires PHP: 7.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Sube archivos KML y muéstralos como mapas interactivos con capas de colores y filtro por campo, sin bloquear el navegador aunque tengan miles de objetos.
+Upload KML files and display them as interactive maps with colored layers, opacity control and field filtering, unlimited and free.
 
 == Description ==
 
-KML-Map convierte cualquier archivo KML (el formato que exportan QGIS, Google Earth y la mayoría de programas GIS) en un mapa interactivo insertable en cualquier página o entrada mediante un shortcode.
+GlocalSaino Layer Map Viewer turns any KML file (the format exported by QGIS, Google Earth, and most GIS software) into an interactive map you can embed in any page or post with a shortcode.
 
-Pensado desde el principio para archivos KML grandes (decenas de miles de objetos): en vez de hacer que el navegador descargue y procese el archivo entero, el propio plugin lo analiza en segundo plano al subirlo y construye un índice; el visor pide después los objetos al servidor por páginas, sin llegar a congelar la pestaña ni en móviles de gama baja.
+Built from the ground up for large KML files (tens of thousands of objects): instead of making the browser download and process the entire file, the plugin analyzes it in the background on upload and builds an index; the viewer then requests objects from the server page by page, without freezing the tab even on low-end mobile devices.
 
-= Funciones principales =
+Every feature below is included, unlimited, in the free plugin — there is no map cap and nothing is locked behind a license.
 
-* Sube uno o varios archivos KML y créales un mapa con el shortcode `[kml_map id="X"]`.
-* Cada capa se pinta en su propio color, elegible al subirla.
-* Opción de mostrar cada capa solo con el borde (sin relleno).
-* Filtro interactivo por un campo del KML (por ejemplo, un código de parcela o de municipio), con el desplegable ya calculado en el servidor.
-* Popup con los datos del objeto al hacer clic.
-* Capa base de OpenStreetMap y de satélite.
-* Análisis y construcción del índice en segundo plano (WP-Cron): subir un KML de varios miles de objetos no bloquea el panel de administración.
-* Carga por páginas en el navegador: los objetos aparecen progresivamente sin llegar a colgar la pestaña, y una vez cargados no desaparecen al cambiar el zoom.
+= Key features =
 
-= Versión Premium =
-
-La versión gratuita permite crear hasta 3 mapas, cada uno con varias capas KML a la vez, y verlos con sus colores por defecto. La versión premium añade:
-
-* Mapas ilimitados (la gratuita se limita a 3).
-* Añadir más capas KML a un mapa que ya existe, sin tener que volver a crearlo.
-* Elegir el campo por el que se filtra y qué campos del KML se muestran en el popup (en la versión gratuita no hay filtro configurado).
-* Personalizar los colores de la caja de filtro y del botón "Limpiar filtro".
+* Create as many maps as you want, each with one or several KML layers.
+* Add more KML layers to a map that already exists, without recreating it.
+* Each layer is drawn in its own color, chosen at upload time.
+* Adjustable fill opacity per layer, from fully transparent (outline only) to fully opaque.
+* Choose which KML field is used for filtering and which fields show in the popup.
+* Interactive filter by that field (for example, a parcel code or a municipality), with the dropdown already computed server-side.
+* Customize the colors of the filter bar and the "Clear filter" button.
+* Popup with the object's data on click.
+* OpenStreetMap and satellite base layers.
+* Background analysis and index building (WP-Cron): uploading a KML with thousands of objects never blocks the admin panel.
+* Paginated loading in the browser: objects appear progressively without hanging the tab, and once loaded they don't disappear when zooming.
 
 == Installation ==
 
-1. Sube la carpeta del plugin a `/wp-content/plugins/` o instálalo desde el panel de administración (Plugins → Añadir nuevo).
-2. Actívalo desde el menú "Plugins".
-3. Ve al nuevo menú "Mapas KML" del panel de administración y crea tu primer mapa subiendo uno o varios archivos `.kml`.
-4. Copia el shortcode que se muestra (por ejemplo `[kml_map id="1"]`) y pégalo en cualquier página o entrada.
+1. Upload the plugin folder to `/wp-content/plugins/` or install it from the admin panel (Plugins → Add New).
+2. Activate it from the "Plugins" menu.
+3. Go to the new "Mapas KML" menu in the admin panel and create your first map by uploading one or more `.kml` files.
+4. Copy the shortcode shown (for example `[glocalsaino_map id="1"]`) and paste it into any page or post.
 
 == Frequently Asked Questions ==
 
-= ¿Admite archivos KMZ? =
+= Does it support KMZ files? =
 
-No, de momento solo `.kml` (KMZ es un KML comprimido en ZIP; habría que descomprimirlo primero).
+Not yet, only `.kml` for now (KMZ is a KML compressed inside a ZIP; you'd need to decompress it first).
 
-= ¿Cuántos objetos aguanta un archivo KML? =
+= How many objects can a KML file handle? =
 
-Se ha probado con capas de más de 60.000 objetos. El análisis se hace en segundo plano al subir el archivo y el visor los carga por páginas, así que el tamaño del archivo no bloquea ni el panel de administración ni el navegador de quien visita la página.
+It has been tested with layers of more than 60,000 objects. The file is analyzed in the background on upload, and the viewer loads objects page by page, so the file size never blocks the admin panel or the visitor's browser.
 
-= ¿Por qué no aparecen los objetos nada más subir el archivo? =
+= Why don't objects appear right after uploading the file? =
 
-El KML se analiza en segundo plano (WP-Cron) para no bloquear la subida. Mientras se completa, el mapa aparece con una vista general y el badge "Procesando capas en segundo plano"; si tarda más de lo esperado, el botón "Analizar ahora" fuerza el análisis inmediatamente.
+The KML is analyzed in the background (WP-Cron) so the upload itself isn't blocked. While that finishes, the map shows a general view and a "Processing layers in the background" badge; if it takes longer than expected, the "Analyze now" button forces the analysis immediately.
 
-= ¿Qué campo se usa para el filtro si no configuro ninguno? =
+= Which field is used for the filter if I don't configure one? =
 
-Ninguno: en la versión gratuita no hay filtro configurado y la caja de filtro no aparece. Elegir el campo por el que se filtra es una función premium (ver "Campos del popup" en el panel de administración).
+None by default: the filter bar only appears once you choose a field under "Campos del popup" (Popup Fields) in the admin panel for that map.
 
-= ¿Cuántos mapas puedo crear? =
+= How many maps can I create? =
 
-Hasta 3 con la versión gratuita. La versión premium permite crear mapas ilimitados.
+As many as you want — there is no limit.
+
+== External services ==
+
+This plugin uses Esri's World Imagery service to provide the optional "satellite" base map layer.
+
+* What it is and what it's used for: a tile service that supplies satellite/aerial imagery tiles, so visitors can switch the map between a standard OpenStreetMap view and a satellite view.
+* What data is sent and when: whenever a visitor views a map with the satellite layer selected, their browser requests map tiles directly from Esri's servers for the visible area (standard web-map tile requests: approximate viewport coordinates and zoom level, plus the visitor's own IP address as part of any HTTP request). No personal data is collected or sent by the plugin itself.
+* Provider: Esri ("World Imagery" service, `server.arcgisonline.com`). [Terms of Use](https://www.esri.com/en-us/legal/terms/web-site-service) — [Privacy Policy](https://www.esri.com/en-us/privacy/overview).
 
 == Screenshots ==
 
-1. Mapa interactivo en el front-end, con varias capas y filtro por campo.
-2. Panel de administración: formulario de creación de un mapa y listado de un mapa ya creado.
-3. Panel de administración: funciones premium desplegadas (añadir más capas, campos del popup y aspecto de la caja de filtro).
+1. Interactive map on the front-end, with several layers and a field filter.
+2. Admin panel: map creation form and listing of an existing map.
+3. Admin panel: layer options expanded (add more layers, popup fields, and filter bar appearance).
 
 == Changelog ==
 
-= 4.4.0 =
-* Internacionalización: todos los textos del plugin (admin y front-end) son ahora traducibles.
-* La capa de satélite pasa de un endpoint no documentado de Google a Esri World Imagery, con términos de uso claros para este caso.
-* Plugin renombrado a "KML-Map".
+= 5.0.3 =
+* Renamed the admin menu from "Mapas" to "Layer Map Viewer".
 
-= 4.3.0 =
-* Límite de 3 mapas en la versión gratuita (ilimitados en premium).
-* Nueva función premium: personalizar los colores de la caja de filtro y del botón "Limpiar filtro".
-* El campo de filtro ya no tiene un valor por defecto ("NUM_SOCIO"): en la versión gratuita no hay filtro hasta activar la premium y elegirlo en "Campos del popup".
+= 5.0.2 =
+* Fixed `InputNotSanitized` warnings on `$_FILES['kml_files']` that came back after adding the opacity parameter: with 4 arguments, Freemius's packaging tool now wraps the `kml_map_upload_files()` call across multiple lines, which again separated the `phpcs:ignore` comment from the actual flagged line. Fixed by extracting the `$_FILES` access into its own single-line variable, immune to argument-count-driven line wrapping.
+* Renamed the admin menu from "Mapas KML" to "Mapas", since upcoming add-ons will support layer formats beyond KML.
 
-= 4.2.0 =
-* Preparación para WordPress.org: Leaflet se sirve empaquetado con el plugin en vez de desde un CDN externo.
-* Integración con Freemius para la versión premium (añadir capas a un mapa existente y configurar los campos del popup).
-* Revisión de sanitización de entradas y escapado de salida.
+= 5.0.1 =
+* Removed `wp_org_gatekeeper` from the Freemius config: it only mattered for generating a stripped-down free package from a premium source, which no longer applies now that there's no premium code at all. Set `has_addons` back to `false` until a real add-on product exists to link.
 
-= 4.1.0 =
-* Nueva opción por capa para pintar solo el borde, sin relleno.
+= 5.0.0 =
+* Renamed the plugin to "GlocalSaino Layer Map Viewer" (previously "KML-Map").
+* The plugin is now 100% free with no limits: removed the 3-map cap and unlocked "add more layers", "popup fields" and "filter bar appearance" for everyone, in compliance with WordPress.org's guideline against locking built-in functionality behind a license. Paid add-ons (more layer formats, more base maps) will be offered separately in the future, not bundled with this plugin.
+* New feature: adjustable fill opacity per layer.
+* Moved the inline admin `<script>` block to a properly enqueued script file (`assets/js/admin-page.js`), scoped only to this plugin's own admin page.
+* Added disclosure of the Esri World Imagery external service to this readme.
+* Renamed internal identifiers (shortcode, post type, REST namespace, admin menu, script/style handles) to avoid collisions with other plugins.
 
-= 4.0.1 =
-* Corrección de acentos y eñes corruptos en el desplegable de filtro.
+= 4.5.1 =
+* Fixed a bug where the "add more layers" / "popup fields" / "filter bar appearance" upsell notices always showed as locked in the free package, even for users with an active trial or paid license.
 
-= 4.0.0 =
-* Simplificación de la carga: cada capa se carga entera por páginas en cuanto se abre el mapa y ya no desaparece al cambiar el zoom.
+= 4.5.0 =
+* Moved the Freemius SDK to `vendor/freemius/wordpress-sdk/`, loaded via `vendor/autoload.php`, per WordPress.org's guidance.
 
-= 3.7.0 y anteriores =
-* Índice espacial en el servidor y endpoint paginado para evitar bloqueos con capas muy densas.
-* Análisis en segundo plano (WP-Cron) para no bloquear la subida de archivos grandes.
-
-== Upgrade Notice ==
-
-= 4.4.0 =
-La capa de satélite pasa de Google a Esri World Imagery: mismo uso, la imagen puede variar ligeramente según la zona.
-
-= 4.3.0 =
-Si tenías el filtro funcionando por el campo "NUM_SOCIO" por defecto sin haberlo elegido tú, tras esta actualización deja de mostrarse; actívalo de nuevo en "Campos del popup" (función premium).
-
-= 4.2.0 =
-Cambia de dónde se sirve Leaflet (ahora local en vez de un CDN externo); no requiere ninguna acción manual.
+= 4.4.0 and earlier =
+* See the plugin's GitHub repository for the full history prior to the WordPress.org submission.

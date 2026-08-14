@@ -1,0 +1,9 @@
+{
+    "name": "glocalsaino/kml-map",
+    "description": "KML-Map WordPress plugin dependencies",
+    "type": "project",
+    "license": "GPL-2.0-or-later",
+    "require": {
+        "freemius/wordpress-sdk": "^2.13"
+    }
+}
