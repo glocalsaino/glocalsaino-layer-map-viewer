@@ -191,7 +191,14 @@
         // Aviso mientras una capa muy densa sigue cargando por páginas (ver
         // fetchLayerPage): informa del progreso en vez de dejar que el
         // usuario piense que esos objetos no van a aparecer nunca.
-        var loadingIndicator = L.control( { position: 'bottomleft' } );
+        //
+        // 'topleft' (debajo del control de zoom) en vez de 'bottomleft':
+        // ahí abajo está la atribución del mapa base (OpenStreetMap/Esri),
+        // que en pantallas estrechas (móvil) ocupa casi todo el ancho y se
+        // superponía con este aviso, dejando ambos ilegibles. Leaflet apila
+        // varios controles en la misma esquina sin solaparlos nunca, así que
+        // aquí no choca con el zoom.
+        var loadingIndicator = L.control( { position: 'topleft' } );
         loadingIndicator.onAdd = function () {
             var div = L.DomUtil.create( 'div' );
             div.style.cssText = 'background:#e7f1ff;color:#0a3766;padding:4px 10px;'

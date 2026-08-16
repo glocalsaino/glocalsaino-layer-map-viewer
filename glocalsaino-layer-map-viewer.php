@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       GlocalSaino Layer Map Viewer
  * Description:       Sube uno o varios archivos KML y muestra mapas interactivos con capas de colores, filtro por campo y control de transparencia, sin límite de mapas.
- * Version:           5.0.3
+ * Version:           5.2.1
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            Glocal Saino
@@ -20,7 +20,7 @@ if ( function_exists( 'kml_map_fs' ) ) {
     kml_map_fs()->set_basename( true, __FILE__ );
 } else {
 
-    define( 'KML_MAP_VERSION', '5.0.3' );
+    define( 'KML_MAP_VERSION', '5.2.1' );
     define( 'KML_MAP_DIR',     plugin_dir_path( __FILE__ ) );
     define( 'KML_MAP_URL',     plugin_dir_url( __FILE__ ) );
 
@@ -90,7 +90,13 @@ if ( function_exists( 'kml_map_fs' ) ) {
     // Subir este número fuerza a reconstruir en segundo plano el índice de todas
     // las capas ya analizadas con un formato antiguo, sin depender de que
     // alguien pulse "Analizar ahora" a mano.
-    define( 'KML_MAP_TILE_SCHEMA_VERSION', 4 );
+    //
+    // Subida a 5: cambio de un .json por celda (todos sus objetos en un único
+    // array, que había que tener enteros en memoria para escribirlo) a
+    // .ndjson (un objeto por línea, escrito según se lee del KML). Cualquier
+    // índice construido con la versión 4 podía haber quedado incompleto o
+    // vacío en capas muy grandes, sin ningún aviso de error visible.
+    define( 'KML_MAP_TILE_SCHEMA_VERSION', 5 );
 
     // ---------------------------------------------------------------------------
     // Permitir archivos KML en WordPress
@@ -366,12 +372,22 @@ if ( function_exists( 'kml_map_fs' ) ) {
 
     // ---------------------------------------------------------------------------
     // Construye el índice espacial de una capa: reparte sus objetos en una
-    // cuadrícula de celdas (una carpeta con un archivo .json por celda) para que
-    // tanto construir como servir la capa se haga leyendo/escribiendo varios
-    // archivos pequeños en vez de uno solo con los 63.000+ objetos de golpe
-    // (lo que agotaba la memoria de PHP). También calcula, de paso y sin coste
-    // adicional, el rectángulo que engloba los objetos de cada valor del campo
-    // de filtrado, para poder encuadrar el mapa a ellos sin descargar la capa.
+    // cuadrícula de celdas (una carpeta con un archivo por celda) para que
+    // servir la capa se haga leyendo varios archivos pequeños en vez de uno
+    // solo con los 63.000+ objetos de golpe. También calcula, de paso y sin
+    // coste adicional, el rectángulo que engloba los objetos de cada valor
+    // del campo de filtrado, para poder encuadrar el mapa a ellos sin
+    // descargar la capa.
+    //
+    // Cada objeto se escribe en su archivo de celda (formato NDJSON: una
+    // línea = un objeto) nada más leerlo, en vez de acumular los objetos de
+    // toda la capa en un array en memoria y escribir solo al final: con una
+    // capa de decenas de miles de objetos, acumular todo antes de escribir
+    // agotaba la memoria de PHP incluso con wp_raise_memory_limit(), y como
+    // eso pasa siempre a mitad del bucle de lectura, nunca se llegaba a
+    // escribir ni un solo archivo — la capa quedaba con "analyzed" a true
+    // (los campos/valores de filtro sí se calculan aparte, en un paso ligero
+    // que si termina) pero sin ningún objeto que servir en el front-end.
     // ---------------------------------------------------------------------------
     function kml_map_build_feature_index( $path, $out_dir, $filter_field = '' ) {
         $value_bounds = [];
@@ -381,7 +397,9 @@ if ( function_exists( 'kml_map_fs' ) ) {
         }
 
         if ( ! file_exists( $out_dir ) ) wp_mkdir_p( $out_dir );
-        foreach ( glob( trailingslashit( $out_dir ) . '*.json' ) ?: [] as $old ) wp_delete_file( $old );
+        foreach ( glob( trailingslashit( $out_dir ) . '*' ) ?: [] as $old ) {
+            if ( is_file( $old ) ) wp_delete_file( $old );
+        }
 
         $reader          = new XMLReader();
         $prev_use_errors = libxml_use_internal_errors( true );
@@ -392,7 +410,6 @@ if ( function_exists( 'kml_map_fs' ) ) {
         }
 
         $cell_size = KML_MAP_TILE_CELL_SIZE;
-        $cells     = [];
 
         while ( @$reader->read() ) {
             if ( $reader->nodeType !== XMLReader::ELEMENT || $reader->localName !== 'Placemark' ) continue;
@@ -422,11 +439,20 @@ if ( function_exists( 'kml_map_fs' ) ) {
             $cy  = (int) floor( ( ( $bounds[0] + $bounds[2] ) / 2 ) / $cell_size );
             $key = $cx . '_' . $cy;
 
-            $cells[ $key ][] = [
-                'geometry'   => $geometry,
-                'bounds'     => $bounds,
-                'properties' => $properties,
-            ];
+            // file_put_contents() con FILE_APPEND (no fopen/fwrite persistentes,
+            // que las normas de WordPress.org no permiten): añade la línea al
+            // final del archivo de esta celda, abriendo y cerrando el archivo
+            // en cada llamada. Sigue sin acumular en memoria los objetos de
+            // toda la capa, que es lo que agotaba la memoria con capas grandes.
+            file_put_contents(
+                trailingslashit( $out_dir ) . $key . '.ndjson',
+                wp_json_encode( [
+                    'geometry'   => $geometry,
+                    'bounds'     => $bounds,
+                    'properties' => $properties,
+                ], JSON_UNESCAPED_UNICODE ) . "\n",
+                FILE_APPEND | LOCK_EX
+            );
 
             if ( $filter_field && isset( $properties[ $filter_field ] ) && $properties[ $filter_field ] !== '' ) {
                 $v = $properties[ $filter_field ];
@@ -445,13 +471,26 @@ if ( function_exists( 'kml_map_fs' ) ) {
         $reader->close();
         libxml_use_internal_errors( $prev_use_errors );
 
-        foreach ( $cells as $key => $features ) {
-            file_put_contents( trailingslashit( $out_dir ) . $key . '.json', wp_json_encode( $features, JSON_UNESCAPED_UNICODE ) );
-        }
-
         file_put_contents( trailingslashit( $out_dir ) . '.schema', (string) KML_MAP_TILE_SCHEMA_VERSION );
 
         return $value_bounds;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Helper: ¿alguno de los archivos subidos superó upload_max_filesize o
+    // post_max_size (límite del propio PHP/hosting)? En ese caso PHP marca el
+    // archivo con error UPLOAD_ERR_INI_SIZE/FORM_SIZE, kml_map_upload_files()
+    // lo descarta como cualquier otro fallo, y sin esta comprobación el
+    // usuario recibía el mismo aviso genérico de "extensión no válida" aunque
+    // el archivo sí fuera .kml — confuso y no decía lo que realmente pasaba.
+    // ---------------------------------------------------------------------------
+    function kml_map_upload_exceeds_size_limit( $files_array ) {
+        foreach ( (array) ( $files_array['error'] ?? [] ) as $error_code ) {
+            if ( in_array( (int) $error_code, [ UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE ], true ) ) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ---------------------------------------------------------------------------
@@ -569,10 +608,15 @@ if ( function_exists( 'kml_map_fs' ) ) {
         // no lo ha elegido en "Campos del popup"), no se filtra nada: no tiene
         // sentido buscar valores de un campo por defecto que puede ni existir
         // en el KML de quien lo use.
-        $filter_field  = get_post_meta( $post_id, '_glocalsaino_map_filter_field', true ) ?: '';
-        $fields        = json_decode( get_post_meta( $post_id, '_glocalsaino_map_fields_available', true ), true ) ?: [];
-        $filter_values = json_decode( get_post_meta( $post_id, '_glocalsaino_map_filter_values', true ), true ) ?: [];
-        $value_bounds  = json_decode( get_post_meta( $post_id, '_glocalsaino_map_filter_value_bounds', true ), true ) ?: [];
+        $filter_field    = get_post_meta( $post_id, '_glocalsaino_map_filter_field', true ) ?: '';
+        $fields          = json_decode( get_post_meta( $post_id, '_glocalsaino_map_fields_available', true ), true ) ?: [];
+        // Qué capa(s) tienen cada campo (por nombre de capa): distintas capas
+        // pueden traer un campo con el mismo nombre pero significados
+        // distintos, así que en el panel se muestra junto a qué capa(s)
+        // aparece cada uno, en vez de una lista plana sin esa referencia.
+        $fields_by_layer = json_decode( get_post_meta( $post_id, '_glocalsaino_map_fields_by_layer', true ), true ) ?: [];
+        $filter_values   = json_decode( get_post_meta( $post_id, '_glocalsaino_map_filter_values', true ), true ) ?: [];
+        $value_bounds    = json_decode( get_post_meta( $post_id, '_glocalsaino_map_filter_value_bounds', true ), true ) ?: [];
 
         foreach ( $layers as $idx => $layer ) {
             // Una capa que ya tenía 'analyzed' de antes de existir el índice
@@ -590,14 +634,20 @@ if ( function_exists( 'kml_map_fs' ) ) {
             $layers[ $idx ]['bounds']   = $analysis['bounds'];
             $layers[ $idx ]['analyzed'] = true;
 
+            $layer_name = $layer['name'] ?? '';
             foreach ( $analysis['fields'] as $f ) {
                 if ( ! in_array( $f, $fields, true ) ) $fields[] = $f;
+
+                if ( ! isset( $fields_by_layer[ $f ] ) ) $fields_by_layer[ $f ] = [];
+                if ( $layer_name && ! in_array( $layer_name, $fields_by_layer[ $f ], true ) ) {
+                    $fields_by_layer[ $f ][] = $layer_name;
+                }
             }
             foreach ( $analysis['filter_values'] as $v ) {
                 if ( ! in_array( $v, $filter_values, true ) ) $filter_values[] = $v;
             }
 
-            // Índice de la capa: reparte sus objetos en varios archivos .json
+            // Índice de la capa: reparte sus objetos en varios archivos NDJSON
             // pequeños (ver el endpoint REST más abajo, que los pagina) en vez de
             // uno solo con todos los objetos de golpe. De paso calcula el
             // rectángulo que engloba los objetos de cada valor del filtro.
@@ -621,6 +671,7 @@ if ( function_exists( 'kml_map_fs' ) ) {
             // se pierde lo ya analizado y se retoma donde quedó.
             update_post_meta( $post_id, '_glocalsaino_map_layers', wp_json_encode( $layers, JSON_UNESCAPED_UNICODE ) );
             update_post_meta( $post_id, '_glocalsaino_map_fields_available', wp_json_encode( $fields, JSON_UNESCAPED_UNICODE ) );
+            update_post_meta( $post_id, '_glocalsaino_map_fields_by_layer', wp_json_encode( $fields_by_layer, JSON_UNESCAPED_UNICODE ) );
             if ( ! get_post_meta( $post_id, '_glocalsaino_map_fields_visible', true ) ) {
                 update_post_meta( $post_id, '_glocalsaino_map_fields_visible', wp_json_encode( $fields, JSON_UNESCAPED_UNICODE ) );
             }
@@ -717,14 +768,24 @@ if ( function_exists( 'kml_map_fs' ) ) {
             // Todos los archivos de celda de la capa, en orden estable: el mismo
             // orden en cada petición es lo que hace que las páginas sucesivas no
             // se salten ni repitan objetos.
-            $files = glob( trailingslashit( $tile_dir ) . '*.json' ) ?: [];
+            //
+            // Formato NDJSON (una línea = un objeto): cada archivo de celda es
+            // pequeño (los objetos de la capa están repartidos entre varios),
+            // así que leerlo entero con file_get_contents() y partirlo por
+            // líneas no vuelve a cargar toda la capa de golpe en memoria como
+            // pasaba antes de repartirla en celdas.
+            $files = glob( trailingslashit( $tile_dir ) . '*.ndjson' ) ?: [];
             sort( $files );
 
             foreach ( $files as $file ) {
-                $cell_features = json_decode( file_get_contents( $file ), true );
-                if ( ! is_array( $cell_features ) ) continue;
+                $lines = explode( "\n", (string) file_get_contents( $file ) );
 
-                foreach ( $cell_features as $f ) {
+                foreach ( $lines as $line ) {
+                    if ( $line === '' ) continue;
+
+                    $f = json_decode( $line, true );
+                    if ( ! is_array( $f ) ) continue;
+
                     if ( $filter_field && $filter_values ) {
                         $v = $f['properties'][ $filter_field ] ?? null;
                         if ( $v === null || ! in_array( (string) $v, $filter_values, true ) ) continue;
@@ -743,6 +804,13 @@ if ( function_exists( 'kml_map_fs' ) ) {
                         'properties' => $f['properties'],
                     ];
                 }
+
+                // Libera el contenido de esta celda antes de pasar a la
+                // siguiente, en vez de esperar a que $lines se sobrescriba
+                // sola en la próxima vuelta: con una celda muy poblada, no
+                // tiene sentido mantener sus líneas en memoria mientras se
+                // procesa la siguiente.
+                unset( $lines );
             }
         }
 
@@ -772,6 +840,10 @@ if ( function_exists( 'kml_map_fs' ) ) {
         }
         if ( empty( $_FILES['kml_files']['name'][0] ) ) {
             wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=nofile' ) ); exit;
+        }
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- solo se leen los códigos numéricos de error de subida (kml_map_upload_exceeds_size_limit()), no nombres de archivo ni otros datos de texto.
+        if ( kml_map_upload_exceeds_size_limit( wp_unslash( $_FILES['kml_files'] ) ) ) {
+            wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=toobig' ) ); exit;
         }
 
         $colors  = array_map( 'sanitize_text_field', wp_unslash( (array) ( $_POST['kml_colors'] ?? [] ) ) );
@@ -819,6 +891,10 @@ if ( function_exists( 'kml_map_fs' ) ) {
 
         if ( empty( $_FILES['kml_files']['name'][0] ) ) {
             wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=nofile' ) ); exit;
+        }
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- solo se leen los códigos numéricos de error de subida (kml_map_upload_exceeds_size_limit()), no nombres de archivo ni otros datos de texto.
+        if ( kml_map_upload_exceeds_size_limit( wp_unslash( $_FILES['kml_files'] ) ) ) {
+            wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=toobig' ) ); exit;
         }
 
         $colors     = array_map( 'sanitize_text_field', wp_unslash( (array) ( $_POST['kml_colors'] ?? [] ) ) );
@@ -878,7 +954,21 @@ if ( function_exists( 'kml_map_fs' ) ) {
         $map_id = intval( $_GET['map_id'] ?? 0 );
         check_admin_referer( 'kml_map_analyze_now_' . $map_id );
 
-        kml_map_run_analysis( $map_id );
+        // Nunca se analiza aquí mismo, de forma síncrona: con un KML de
+        // muchos miles de objetos, esta misma petición HTTP podía superar el
+        // límite de tiempo/memoria del propio servidor web (no solo el de
+        // PHP, que sí se puede levantar) y devolver un error 500 al pulsar
+        // este botón, aunque el mismo análisis en segundo plano (WP-Cron)
+        // completara sin problema. En vez de eso, se fuerza el reanálisis
+        // marcando las capas como no analizadas y se dispara en segundo
+        // plano, igual que tras subir un mapa nuevo.
+        $layers = json_decode( get_post_meta( $map_id, '_glocalsaino_map_layers', true ), true ) ?: [];
+        foreach ( $layers as $idx => $layer ) {
+            $layers[ $idx ]['analyzed'] = false;
+        }
+        update_post_meta( $map_id, '_glocalsaino_map_layers', wp_json_encode( $layers, JSON_UNESCAPED_UNICODE ) );
+
+        kml_map_schedule_analysis( $map_id );
 
         wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&analyzed=1' ) ); exit;
     } );

@@ -14,15 +14,20 @@ $maps = get_posts( [
     'order'       => 'DESC',
 ] );
 
+// Tamaño máximo de subida (mismo límite que usa la Biblioteca de medios de
+// WordPress: lo marca la configuración de PHP del hosting)
+$max_upload_size = size_format( wp_max_upload_size() );
+
 $errors = [
     'notitle' => __( 'Debes introducir un nombre para el mapa.', 'glocalsaino-layer-map-viewer' ),
     'nofile'  => __( 'Debes seleccionar al menos un archivo KML.', 'glocalsaino-layer-map-viewer' ),
     'badext'  => __( 'Los archivos deben tener extensión .kml.', 'glocalsaino-layer-map-viewer' ),
+    'toobig'  => sprintf(
+        /* translators: %s: tamaño máximo de subida, ya formateado (p.ej. "64 MB") */
+        __( 'Uno o más archivos superan el tamaño máximo de subida permitido por tu hosting (%s). Pide a quien administre el servidor que aumente upload_max_filesize/post_max_size, o divide el KML en archivos más pequeños.', 'glocalsaino-layer-map-viewer' ),
+        $max_upload_size
+    ),
 ];
-
-// Tamaño máximo de subida (mismo límite que usa la Biblioteca de medios de
-// WordPress: lo marca la configuración de PHP del hosting)
-$max_upload_size = size_format( wp_max_upload_size() );
 
 // Paleta de colores (misma que en el JS, para mostrar muestra visual)
 $palette = [
@@ -88,7 +93,7 @@ $palette = [
         <div class="notice notice-success is-dismissible"><p>✔ <?php esc_html_e( 'Configuración de campos guardada.', 'glocalsaino-layer-map-viewer' ); ?></p></div>
     <?php endif; ?>
     <?php if ( $kml_map_notice_analyzed ) : ?>
-        <div class="notice notice-success is-dismissible"><p>✔ <?php esc_html_e( 'Análisis completado.', 'glocalsaino-layer-map-viewer' ); ?></p></div>
+        <div class="notice notice-success is-dismissible"><p>✔ <?php esc_html_e( 'Análisis relanzado en segundo plano. Puede tardar unos minutos en capas con muchos objetos; recarga esta página más tarde para comprobarlo.', 'glocalsaino-layer-map-viewer' ); ?></p></div>
     <?php endif; ?>
     <?php if ( $kml_map_notice_saved_fill ) : ?>
         <div class="notice notice-success is-dismissible"><p>✔ <?php esc_html_e( 'Relleno actualizado.', 'glocalsaino-layer-map-viewer' ); ?></p></div>
@@ -147,7 +152,8 @@ $palette = [
                                 esc_html__( 'Tamaño máximo de subida: %s por archivo.', 'glocalsaino-layer-map-viewer' ),
                                 '<strong>' . esc_html( $max_upload_size ) . '</strong>'
                             );
-                            ?>
+                            ?><br>
+                            <?php esc_html_e( 'Con archivos muy grandes (decenas de miles de objetos) también influyen el límite de memoria de PHP y que WP-Cron pueda ejecutarse — ver "Preguntas frecuentes" en la página del plugin.', 'glocalsaino-layer-map-viewer' ); ?>
                         </p>
                     </td>
                 </tr>
@@ -172,6 +178,10 @@ $palette = [
         <?php foreach ( $maps as $map ) :
             $layers           = json_decode( get_post_meta( $map->ID, '_glocalsaino_map_layers', true ), true ) ?: [];
             $fields_available = json_decode( get_post_meta( $map->ID, '_glocalsaino_map_fields_available', true ), true ) ?: [];
+            // A qué capa(s) pertenece cada campo, para mostrarlo junto al
+            // nombre (ver más abajo); puede venir vacío en mapas analizados
+            // antes de esta función, hasta que se reanalicen.
+            $fields_by_layer  = json_decode( get_post_meta( $map->ID, '_glocalsaino_map_fields_by_layer', true ), true ) ?: [];
             $filter_field     = get_post_meta( $map->ID, '_glocalsaino_map_filter_field', true ) ?: '';
 
             // Si a este mapa le falta el análisis de alguna capa (recién
@@ -395,10 +405,15 @@ $palette = [
                                     </label>
                                     <select name="kml_filter_field"
                                             style="font-size:13px;padding:4px 6px;border:1px solid #b0b4bb;border-radius:4px;min-width:180px">
-                                        <?php foreach ( $fields_available as $field ) : ?>
+                                        <?php foreach ( $fields_available as $field ) :
+                                            $field_layers = $fields_by_layer[ $field ] ?? [];
+                                            $option_label = $field_layers
+                                                ? $field . ' (' . implode( ', ', $field_layers ) . ')'
+                                                : $field;
+                                        ?>
                                             <option value="<?php echo esc_attr( $field ); ?>"
                                                     <?php selected( $filter_field, $field ); ?>>
-                                                <?php echo esc_html( $field ); ?>
+                                                <?php echo esc_html( $option_label ); ?>
                                             </option>
                                         <?php endforeach; ?>
                                     </select>
@@ -409,11 +424,15 @@ $palette = [
                                 <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">
                                     <?php esc_html_e( 'Campos visibles en el popup:', 'glocalsaino-layer-map-viewer' ); ?>
                                 </label>
+                                <p class="description" style="margin:-4px 0 8px">
+                                    <?php esc_html_e( 'Entre paréntesis, la(s) capa(s) donde aparece cada campo — útil si varias capas tienen un campo con el mismo nombre pero distinto significado.', 'glocalsaino-layer-map-viewer' ); ?>
+                                </p>
 
                                     <div style="display:flex;flex-wrap:wrap;gap:6px 20px;margin-bottom:12px">
                                         <?php foreach ( $fields_available as $field ) :
                                             // Si $fields_visible es null (sin configurar), todos visibles por defecto
-                                            $checked = ( $fields_visible === null || in_array( $field, $fields_visible ) );
+                                            $checked      = ( $fields_visible === null || in_array( $field, $fields_visible ) );
+                                            $field_layers = $fields_by_layer[ $field ] ?? [];
                                         ?>
                                         <label style="font-size:13px;display:flex;align-items:center;gap:5px;cursor:pointer">
                                             <input type="checkbox"
@@ -421,6 +440,9 @@ $palette = [
                                                    value="<?php echo esc_attr( $field ); ?>"
                                                    <?php checked( $checked ); ?>>
                                             <?php echo esc_html( $field ); ?>
+                                            <?php if ( $field_layers ) : ?>
+                                                <span style="color:#888;font-size:11px">(<?php echo esc_html( implode( ', ', $field_layers ) ); ?>)</span>
+                                            <?php endif; ?>
                                         </label>
                                         <?php endforeach; ?>
                                     </div>
