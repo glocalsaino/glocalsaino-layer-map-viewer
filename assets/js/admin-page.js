@@ -1,7 +1,8 @@
 (function () {
     var PALETTE = ['#4daf4a','#4393c3','#f1a340','#d73027','#998ec3','#bf812d','#35978f','#e9a3c9'];
     var I18N = window.GlocalSainoMapAdminI18n || {
-        file: 'File', color: 'Layer color', fill: 'Fill', noFill: 'Outline only'
+        file: 'File', color: 'Layer color', fill: 'Fill', noFill: 'Outline only',
+        iconSize: 'Marker (px)'
     };
 
     function buildPickers(input, container) {
@@ -15,24 +16,38 @@
         var header = document.createElement('tr');
         header.innerHTML = '<th style="padding:4px 12px 4px 0;color:#777;font-weight:normal;text-align:left">' + I18N.file + '</th>'
                          + '<th style="padding:4px 12px 4px 0;color:#777;font-weight:normal;text-align:left">' + I18N.color + '</th>'
-                         + '<th style="padding:4px 0;color:#777;font-weight:normal;text-align:left">' + I18N.fill + '</th>';
+                         + '<th style="padding:4px 12px 4px 0;color:#777;font-weight:normal;text-align:left">' + I18N.fill + '</th>'
+                         + '<th style="padding:4px 0;color:#777;font-weight:normal;text-align:left">' + I18N.iconSize + '</th>';
         table.appendChild(header);
 
         for (var i = 0; i < files.length; i++) {
             var name  = files[i].name.replace(/\.kml$/i, '');
             var color = PALETTE[i % PALETTE.length];
             var tr    = document.createElement('tr');
+            var valId = 'kml-color-val-' + i + '-' + Date.now();
             tr.innerHTML = '<td style="padding:5px 12px 5px 0">' + escHtml(name) + '</td>'
-                         + '<td style="padding:5px 12px 5px 0">'
+                         + '<td style="padding:5px 12px 5px 0;white-space:nowrap">'
                          + '<input type="color" name="kml_colors[]" value="' + color + '" '
+                         + 'oninput="document.getElementById(\'' + valId + '\').textContent=this.value" '
                          + 'style="width:48px;height:30px;border:1px solid #ccc;border-radius:3px;cursor:pointer;vertical-align:middle">'
+                         + ' <code id="' + valId + '" style="color:#777">' + color + '</code>'
                          + '</td>'
-                         + '<td style="padding:5px 0;white-space:nowrap">'
+                         + '<td style="padding:5px 12px 5px 0;white-space:nowrap">'
                          + '<label style="display:flex;align-items:center;gap:4px;cursor:pointer">'
                          + '<input type="checkbox" name="kml_no_fill[' + i + ']" value="1"> ' + I18N.noFill
                          + '</label>'
                          + '<input type="range" name="kml_opacity[' + i + ']" min="0" max="100" step="5" value="60" '
                          + 'style="width:60px;vertical-align:middle;margin-left:10px">'
+                         + '</td>'
+                         // Solo se usa si los objetos de la capa resultan ser
+                         // puntos (p.ej. una fuente de datos externa de un
+                         // add-on); si son polígonos/líneas, se ignora sin
+                         // más, igual que "Solo borde" no tiene efecto visible
+                         // en un punto. El marcador siempre es un círculo del
+                         // color de la capa; solo se elige su tamaño.
+                         + '<td style="padding:5px 0">'
+                         + '<input type="number" name="kml_icon_size[' + i + ']" value="8" min="4" max="60" '
+                         + 'style="width:64px">'
                          + '</td>';
             table.appendChild(tr);
         }

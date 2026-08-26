@@ -2,8 +2,8 @@
 Contributors: glocalsaino, rafammoo
 Tags: kml, map, leaflet, gis, kmz
 Requires at least: 5.8
-Tested up to: 7.0
-Stable tag: 5.2.1
+Tested up to: 7.1
+Stable tag: 5.12.5
 Requires PHP: 7.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -24,11 +24,13 @@ Every feature below is included, unlimited, in the free plugin — there is no m
 * Add more KML layers to a map that already exists, without recreating it.
 * Each layer is drawn in its own color, chosen at upload time.
 * Adjustable fill opacity per layer, from fully transparent (outline only) to fully opaque.
+* For point layers, choose the marker size (a circle in the layer's color) at upload time.
+* Point markers that end up close together are automatically grouped into clusters, instead of stacking on top of each other; they split apart as you zoom in.
 * Choose which KML field is used for filtering and which fields show in the popup.
 * Interactive filter by that field (for example, a parcel code or a municipality), with the dropdown already computed server-side.
 * Customize the colors of the filter bar and the "Clear filter" button.
 * Popup with the object's data on click.
-* OpenStreetMap and satellite base layers.
+* OpenStreetMap and satellite (Esri) base layers; more can be added by an add-on via the `glocalsaino_map_base_layers` filter, without modifying this plugin.
 * Background analysis and index building (WP-Cron): uploading a KML with thousands of objects never blocks the admin panel.
 * Paginated loading in the browser: objects appear progressively without hanging the tab, and once loaded they don't disappear when zooming.
 
@@ -38,6 +40,15 @@ Every feature below is included, unlimited, in the free plugin — there is no m
 2. Activate it from the "Plugins" menu.
 3. Go to the new "Mapas KML" menu in the admin panel and create your first map by uploading one or more `.kml` files.
 4. Copy the shortcode shown (for example `[glocalsaino_map id="1"]`) and paste it into any page or post.
+
+= Shortcode parameters =
+
+* `id` (required) — the map's ID, shown next to each map in the admin panel.
+* `height` — height in pixels (default: 550).
+* `zoom` — initial zoom level (default: 8, only used together with `lat`/`lng`, or to force the zoom on top of the automatic layer fit).
+* `lat` / `lng` — initial map center. When set, they take priority over the automatic fit-to-layers view.
+
+Example: `[glocalsaino_map id="1" height="700" zoom="12" lat="40.4168" lng="-3.7038"]`
 
 == Frequently Asked Questions ==
 
@@ -64,7 +75,7 @@ The KML is analyzed in the background (WP-Cron) so the upload itself isn't block
 
 = Which field is used for the filter if I don't configure one? =
 
-None by default: the filter bar only appears once you choose a field under "Campos del popup" (Popup Fields) in the admin panel for that map.
+None by default: the filter bar only appears once you choose a field under "Popup Fields" in the admin panel for that map.
 
 = How many maps can I create? =
 
@@ -80,11 +91,87 @@ This plugin uses Esri's World Imagery service to provide the optional "satellite
 
 == Screenshots ==
 
-1. Interactive map on the front-end, with several layers and a field filter.
-2. Admin panel: map creation form and listing of an existing map.
-3. Admin panel: layer options expanded (add more layers, popup fields, and filter bar appearance).
+1. Interactive map on the front end, with several layers, an open feature popup, and the filter box.
+2. Admin panel: the "Create new map" section.
+3. Admin panel: "Create new map" section with a KML file already selected, showing the layer color, transparency, and marker size options.
+4. Admin panel: "Create new map" and "Available maps" sections, with a map showing the "Add more KML layers", "Popup fields", and "Filter box appearance" options collapsed.
+5. Admin panel: "Available maps" section showing the expanded content of the "Add more KML layers", "Popup fields", and "Filter box appearance" options.
 
 == Changelog ==
+
+= 5.12.5 =
+* Fixed a data-loss bug: if a map's layer data was ever unreadable for any reason (however rare), several actions — "Add more KML layers", changing the filter field, "Analyze now", and simply opening the admin screen — would silently treat the map as if it had no layers yet, and the next save would overwrite the real (if temporarily unreadable) data with an empty list, permanently losing every layer. All of these now detect that case, leave the existing data untouched, and show a clear warning instead. Add-ons using `kml_map_save_layers()` to add layers (e.g. External Data Layers) get the same protection via a new `kml_map_get_layers()` helper.
+
+= 5.12.4 =
+* Popup field values that are a plain http/https URL are now shown as a clickable link (opens in a new tab), instead of plain text. Only whole-value URLs are linked — a URL embedded inside a longer text is left as-is — and any other scheme (e.g. `javascript:`) is never linked.
+* Removed the "Layer:" line that used to appear at the bottom of every popup.
+
+= 5.12.3 =
+* Added an "Extensions" submenu (Layer Map Viewer → Extensions) presenting the GlocalSaino External Data Layers add-on, with a link to https://glocalsaino.com/externaldatalayers/. Pinned last in the admin sidebar.
+* Disabled the Freemius pricing tab in this plugin's own menu, since it stays 100% free and add-ons are promoted through the new Extensions page instead.
+
+= 5.12.2 =
+* Updated "Tested up to" to WordPress 7.1.
+* Added the plugin's website (`Plugin URI`): https://glocalsaino.com/layermapviewer/
+* Replaced all 3 screenshots with 5 new ones reflecting the current English admin UI.
+
+= 5.12.1 =
+* All admin screens and front-end text were originally written in Spanish as the source language; the plugin's source strings are now written in English throughout (translation into other languages via .po/.mo files is unaffected).
+
+= 5.12.0 =
+* The "live layer" last-updated badge now collapses into a dropdown when there's more than one live layer on the same map, instead of stacking a line per layer and taking up a lot of space. With just one live layer it still shows directly, same as before.
+
+= 5.11.2 =
+* Silenced a Plugin Check warning about the `error_log()` call added in 5.11.1 (only ever runs if the site already has `WP_DEBUG_LOG` on; no functional change).
+
+= 5.11.1 =
+* Added `kml_map_save_layers()`, a small safety net around saving a map's layers: if the data somehow couldn't be encoded to valid JSON, the existing layers are left untouched instead of being overwritten with an empty result. Used everywhere this plugin saves a map's layers, and available for add-ons to use too.
+
+= 5.11.0 =
+* Base map layers (OpenStreetMap, satellite) are now built from a filterable list (`glocalsaino_map_base_layers`) instead of being hardcoded, so an add-on can offer more of them (e.g. topographic, alternate styles) without modifying this plugin. No visible change without such an add-on installed.
+
+= 5.10.1 =
+* A layer type registered by an add-on (`glocalsaino_map_layer_types`, e.g. the external data-source add-on) can now report why it found no data (bad URL, unexpected response format, etc.) as a `last_error` stored on the layer itself, so add-ons can surface it in their own admin UI instead of it only ever reaching the debug log. No effect on regular KML layers.
+
+= 5.10.0 =
+* The filter field dropdown (under "Campos del popup") now has a "— Sin filtro —" option, so a map that already had a filter field chosen can go back to having no filter. Previously there was no way to unset it once chosen: the dropdown always had a real field selected, and even editing the underlying data directly wouldn't have worked, since saving an empty value was silently ignored.
+
+= 5.9.2 =
+* Fixed "live" layers (layers with a refresh interval, e.g. from the external data-source add-on) sometimes not showing a moved object's new position after a scheduled refresh: the objects endpoint sends `Cache-Control: public, max-age=60` so regular KML layers can be cached, but that same caching could make the browser, a CDN or the hosting's own cache serve a stale response for a live layer's poll instead of hitting the server again. Live-layer requests now explicitly ask for an uncached response.
+
+= 5.9.1 =
+* Fixed marker clusters sometimes requiring an unreasonably deep zoom to split apart and click on an individual marker, past the point where the base map (OpenStreetMap/satellite) stops rendering tiles and turns blank. The map's zoom is now capped at the base layers' own maximum (19), and clusters that are still tight at that zoom simply show every marker individually instead of trying to zoom in further.
+
+= 5.9.0 =
+* Point markers that end up close together are now automatically grouped into clusters (bundling Leaflet.markercluster), instead of stacking on top of each other with no way to tell them apart or click the one underneath. They split apart automatically as you zoom in.
+
+= 5.8.0 =
+* Removed the emoji/text marker option added in 5.5.0: a point is now always drawn as a circle in the layer's color, with just its size configurable. Simpler and clearer than choosing between a circle and a custom glyph.
+
+= 5.7.2 =
+* Clearer marker options when uploading a KML with points: renamed "Icono (si son puntos)" to "Marcador", added visible labels above the type/emoji/size fields (previously only shown as a hover tooltip) and widened the size field so the number is actually readable. The color picker now shows the exact hex value next to the swatch as you pick it.
+
+= 5.7.1 =
+* Minor wording tweak in the upload form's help text.
+
+= 5.7.0 =
+* New optional shortcode parameters: `height` (default 550px), `zoom` (default 8) and `lat`/`lng`, to set the map's height and initial view instead of always fitting to the layers' bounds. See "Shortcode parameters" below.
+* Fixed a bug (introduced in 5.6.0) where a map with no layers yet never actually initialized on the front-end, showing a blank space instead of the base map.
+
+= 5.6.0 =
+* A map can now be created without uploading any KML file, showing just the base map (OpenStreetMap/satellite) until layers are added — for example, from a data-source add-on. KML layers can still be added and removed at any time, same as before.
+
+= 5.5.0 =
+* For layers whose objects turn out to be points (for example, a live external data source), you can now also choose the marker icon at upload time: a plain colored circle (using the same layer color) or an emoji/text glyph, plus its size. No effect on polygon/line layers.
+
+= 5.4.0 =
+* Added a generic "live layer" indicator: any layer whose data can include an optional refresh interval (used by add-ons with periodically-updating data sources) is now re-fetched automatically in the browser on that schedule, with an on-map badge showing when each such layer was last updated. No effect on regular KML layers, which don't set this.
+
+= 5.3.1 =
+* Fixed a bug where deleting a layer left its fields "orphaned" forever in the "Popup Fields" list and filter dropdown, as if a layer still provided them. Deleting a layer now removes any field no longer provided by a remaining layer, and resets the filter field if it was the one removed.
+
+= 5.3.0 =
+* Added extension points (`glocalsaino_map_layer_types` filter, `glocalsaino_map_after_add_layers_form` and `glocalsaino_map_layer_row_after` actions) so add-ons can register additional layer types — for example, a live external data source — without modifying this plugin's code. No effect on sites without such an add-on installed.
 
 = 5.2.1 =
 * Fixed the "loading objects…" badge overlapping the base map attribution (OpenStreetMap/Esri) on narrow (mobile) screens, making both unreadable. Moved the badge next to the zoom control instead, where Leaflet stacks controls without overlapping regardless of screen width.
