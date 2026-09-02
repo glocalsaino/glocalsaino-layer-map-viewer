@@ -33,7 +33,10 @@
     flex-shrink: 0;
     display: flex;
     flex-direction: row;
+    flex-wrap: wrap;
     align-items: center;
+    justify-content: space-between;
+    gap: 8px 20px;
     padding: 9px 20px;
     background-color: var(--kml-bar-bg, #f0f2f5);
     border-top: 2px solid #c8cbd0;
@@ -101,6 +104,36 @@
     filter: brightness(0.75);
     box-shadow: none;
     transform: translateY(1px);
+}
+
+/* Leyenda (color + nombre de cada capa añadida, sin las capas base). Vive
+   en la misma barra que el filtro, empujada a la derecha por el
+   justify-content: space-between de .kml-map-bar; en pantallas estrechas
+   .kml-map-bar ya pasa a envolver (flex-wrap), así que cae debajo del
+   filtro sin necesitar una media query aparte. */
+.kml-legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
+    font-size: 12px;
+    color: var(--kml-bar-text, #333);
+}
+
+.kml-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+}
+
+.kml-legend-swatch {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    border: 2px solid;
+    flex-shrink: 0;
 }
 
 /* Popup de Leaflet */

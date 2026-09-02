@@ -70,7 +70,7 @@ $palette = [
     // phpcs:ignore WordPress.Security.NonceVerification.Recommended
     $kml_map_notice_analyzed = isset( $_GET['analyzed'] );
     // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-    $kml_map_notice_saved_fill = isset( $_GET['saved_fill'] );
+    $kml_map_notice_saved_layer = isset( $_GET['saved_layer'] );
     // phpcs:ignore WordPress.Security.NonceVerification.Recommended
     $kml_map_notice_saved_bar_style = isset( $_GET['saved_bar_style'] );
     // phpcs:ignore WordPress.Security.NonceVerification.Recommended
@@ -96,8 +96,8 @@ $palette = [
     <?php if ( $kml_map_notice_analyzed ) : ?>
         <div class="notice notice-success is-dismissible"><p>✔ <?php esc_html_e( 'Analysis re-triggered in the background. It may take a few minutes for layers with many objects; reload this page later to check.', 'glocalsaino-layer-map-viewer' ); ?></p></div>
     <?php endif; ?>
-    <?php if ( $kml_map_notice_saved_fill ) : ?>
-        <div class="notice notice-success is-dismissible"><p>✔ <?php esc_html_e( 'Fill updated.', 'glocalsaino-layer-map-viewer' ); ?></p></div>
+    <?php if ( $kml_map_notice_saved_layer ) : ?>
+        <div class="notice notice-success is-dismissible"><p>✔ <?php esc_html_e( 'Layer updated.', 'glocalsaino-layer-map-viewer' ); ?></p></div>
     <?php endif; ?>
     <?php if ( $kml_map_notice_saved_bar_style ) : ?>
         <div class="notice notice-success is-dismissible"><p>✔ <?php esc_html_e( 'Filter box appearance updated.', 'glocalsaino-layer-map-viewer' ); ?></p></div>
@@ -312,15 +312,18 @@ $palette = [
                             // que se usaba fijo hasta ahora.
                             $opacity_pct = isset( $layer['opacity'] ) ? (int) round( $layer['opacity'] * 100 ) : 60;
                         ?>
+                            <?php $row_form_id = 'kml-layer-form-' . $map->ID . '-' . $idx; ?>
                             <tr style="border-bottom:1px solid #f0f0f0">
                                 <td style="padding:6px 8px;color:#999;font-size:12px"><?php echo (int) ( $idx + 1 ); ?></td>
                                 <td style="padding:6px 8px">
-                                    <span style="display:inline-block;width:16px;height:16px;
-                                                 background:<?php echo $fill ? esc_attr( $color ) : 'transparent'; ?>;
-                                                 border-radius:3px;border:2px solid <?php echo esc_attr( $color ); ?>"></span>
+                                    <input type="color" form="<?php echo esc_attr( $row_form_id ); ?>"
+                                           name="color" value="<?php echo esc_attr( $color ); ?>"
+                                           style="width:32px;height:26px;border:1px solid #ccc;border-radius:3px;cursor:pointer;vertical-align:middle">
                                 </td>
                                 <td style="padding:6px 8px;font-weight:500">
-                                    <?php echo esc_html( $layer['name'] ); ?>
+                                    <input type="text" form="<?php echo esc_attr( $row_form_id ); ?>"
+                                           name="layer_name" value="<?php echo esc_attr( $layer['name'] ); ?>"
+                                           class="regular-text" style="font-weight:500">
                                     <?php if ( empty( $layer['analyzed'] ) ) : ?>
                                         <span style="color:#b26b00;font-size:11px;font-weight:normal;white-space:nowrap">
                                             ⏳ <?php esc_html_e( 'processing', 'glocalsaino-layer-map-viewer' ); ?>
@@ -331,11 +334,11 @@ $palette = [
                                     <?php echo esc_html( basename( $layer['url'] ) ); ?>
                                 </td>
                                 <td style="padding:6px 8px">
-                                    <form method="post"
+                                    <form id="<?php echo esc_attr( $row_form_id ); ?>" method="post"
                                           action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"
-                                          style="display:flex;align-items:center;gap:4px">
-                                        <?php wp_nonce_field( 'kml_map_set_fill_' . $map->ID . '_' . $idx ); ?>
-                                        <input type="hidden" name="action" value="kml_map_set_fill">
+                                          style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
+                                        <?php wp_nonce_field( 'kml_map_update_layer_' . $map->ID . '_' . $idx ); ?>
+                                        <input type="hidden" name="action" value="kml_map_update_layer">
                                         <input type="hidden" name="map_id" value="<?php echo (int) $map->ID; ?>">
                                         <input type="hidden" name="layer_idx" value="<?php echo (int) $idx; ?>">
                                         <label style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer;white-space:nowrap">
@@ -347,7 +350,7 @@ $palette = [
                                             <input type="range" name="opacity" min="0" max="100" step="5"
                                                    value="<?php echo (int) $opacity_pct; ?>" style="width:60px">
                                         </label>
-                                        <button type="submit" class="button button-small"><?php esc_html_e( 'OK', 'glocalsaino-layer-map-viewer' ); ?></button>
+                                        <button type="submit" class="button button-small"><?php esc_html_e( 'Save', 'glocalsaino-layer-map-viewer' ); ?></button>
                                     </form>
                                 </td>
                                 <td style="padding:6px 8px">

@@ -128,6 +128,12 @@
         var layerData     = [];   // [{name, url, bounds, displayLayer, requestSeq, loading}, ...]
         var overlays      = {};   // { 'nombre': displayLayer }
         var currentFilter = [];   // valores seleccionados en el filtro (vacío = sin filtro)
+        // Para la leyenda (color + nombre bajo el mapa): se recoge una vez,
+        // con el mismo color exacto que se dibuja en el mapa, y nunca
+        // cambia según el usuario oculte/muestre una capa en el control de
+        // capas de Leaflet — la leyenda lista siempre todas las capas
+        // añadidas por el usuario, nunca las capas base.
+        var legendItems   = [];
 
         // El desplegable del filtro se precarga con los valores calculados
         // en el servidor, así funciona desde el primer instante.
@@ -273,6 +279,8 @@
             layerData.push( ld );
 
             overlays[ kml.name ] = displayLayer;
+
+            legendItems.push( { name: kml.name, fillColor: fillColor, strokeColor: strokeColor, hasFill: hasFill } );
         } );
 
         // Vista inicial: si el shortcode indica un centro explícito (lat+lng),
@@ -298,6 +306,22 @@
             position:  'topright',
             collapsed: true
         } ).addTo( map );
+
+        // Leyenda bajo el mapa (color + nombre de cada capa añadida, nunca
+        // las capas base): se rellena una sola vez, aquí, independientemente
+        // de qué capas estén marcadas como visibles en el control de arriba.
+        var legendEl = document.getElementById( uid + '-bar' );
+        legendEl = legendEl ? legendEl.querySelector( '.kml-legend' ) : null;
+        if ( legendEl ) {
+            legendEl.innerHTML = legendItems.map( function ( it ) {
+                return '<span class="kml-legend-item">'
+                    + '<span class="kml-legend-swatch" style="background:'
+                    + ( it.hasFill ? it.fillColor : 'transparent' )
+                    + ';border-color:' + it.strokeColor + '"></span>'
+                    + escHtml( it.name )
+                    + '</span>';
+            } ).join( '' );
+        }
 
         // Aviso mientras una capa muy densa sigue cargando por páginas (ver
         // fetchLayerPage): informa del progreso en vez de dejar que el

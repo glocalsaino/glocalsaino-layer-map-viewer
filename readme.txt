@@ -3,7 +3,7 @@ Contributors: glocalsaino, rafammoo
 Tags: kml, map, leaflet, gis, kmz
 Requires at least: 5.8
 Tested up to: 7.1
-Stable tag: 5.12.5
+Stable tag: 5.14.0
 Requires PHP: 7.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -22,8 +22,9 @@ Every feature below is included, unlimited, in the free plugin — there is no m
 
 * Create as many maps as you want, each with one or several KML layers.
 * Add more KML layers to a map that already exists, without recreating it.
-* Each layer is drawn in its own color, chosen at upload time.
+* Each layer is drawn in its own color; both the color and the layer's name can be changed at any time, not just when it was uploaded.
 * Adjustable fill opacity per layer, from fully transparent (outline only) to fully opaque.
+* A legend next to the filter bar shows the color and name of every layer on the map.
 * For point layers, choose the marker size (a circle in the layer's color) at upload time.
 * Point markers that end up close together are automatically grouped into clusters, instead of stacking on top of each other; they split apart as you zoom in.
 * Choose which KML field is used for filtering and which fields show in the popup.
@@ -91,13 +92,26 @@ This plugin uses Esri's World Imagery service to provide the optional "satellite
 
 == Screenshots ==
 
-1. Interactive map on the front end, with several layers, an open feature popup, and the filter box.
+1. Interactive map on the front end, with several layers, an open feature popup, the filter box, and the layer legend.
 2. Admin panel: the "Create new map" section.
 3. Admin panel: "Create new map" section with a KML file already selected, showing the layer color, transparency, and marker size options.
-4. Admin panel: "Create new map" and "Available maps" sections, with a map showing the "Add more KML layers", "Popup fields", and "Filter box appearance" options collapsed.
+4. Admin panel: "Create new map" and "Available maps" sections, with editable layer name and color, and the "Add more KML layers", "Popup fields", and "Filter box appearance" options collapsed.
 5. Admin panel: "Available maps" section showing the expanded content of the "Add more KML layers", "Popup fields", and "Filter box appearance" options.
 
 == Changelog ==
+
+= 5.14.0 =
+* Removed the Freemius SDK entirely. This plugin has never had a premium version or paid plans of its own, and the "Extensions" submenu it enabled (for promoting the External Data Layers add-on and the rest of the GlocalSaino plugin family) has been self-built since it was introduced, so the SDK had no remaining purpose — External Data Layers is now registered in Freemius as its own independent product instead of a linked add-on of this one. No functional change for site owners; the plugin zip is smaller.
+
+= 5.13.2 =
+* Added a logo to each card in the "Extensions" submenu.
+
+= 5.13.1 =
+* Redesigned the "Extensions" submenu: the External Data Layers add-on is now a compact card (matching the format used across the other GlocalSaino plugins) instead of a long banner and feature write-up, and it now also cross-promotes GlocalSaino Auctions Displayed by Shortcodes and GlocalSaino WebPagesPassworded — each showing "Active" automatically when already installed.
+
+= 5.13.0 =
+* A layer's name and color can now be edited at any time from the map's layer list, not just when it was first uploaded.
+* Added a legend (color + name of every layer added to the map, base layers not included) next to the filter bar, on the right on desktop and below the filter on narrower screens. It always lists every layer regardless of which ones are currently shown or hidden via the layers control on the map.
 
 = 5.12.5 =
 * Fixed a data-loss bug: if a map's layer data was ever unreadable for any reason (however rare), several actions — "Add more KML layers", changing the filter field, "Analyze now", and simply opening the admin screen — would silently treat the map as if it had no layers yet, and the next save would overwrite the real (if temporarily unreadable) data with an empty list, permanently losing every layer. All of these now detect that case, leave the existing data untouched, and show a clear warning instead. Add-ons using `kml_map_save_layers()` to add layers (e.g. External Data Layers) get the same protection via a new `kml_map_get_layers()` helper.

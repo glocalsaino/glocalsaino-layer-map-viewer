@@ -3,7 +3,7 @@
  * Plugin Name:       GlocalSaino Layer Map Viewer
  * Plugin URI:        https://glocalsaino.com/layermapviewer/
  * Description:       Upload one or more KML files and display interactive maps with colored layers, per-field filtering, and transparency control, with no limit on the number of maps.
- * Version:           5.12.5
+ * Version:           5.14.0
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            Glocal Saino
@@ -14,1534 +14,1520 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-if ( function_exists( 'kml_map_fs' ) ) {
-    // Ya hay otra copia de este plugin cargada (p.ej. la gratuita y la
-    // premium instaladas a la vez): solo le decimos al SDK dónde está
-    // esta copia, sin volver a registrar nada del plugin.
-    kml_map_fs()->set_basename( true, __FILE__ );
-} else {
+define( 'KML_MAP_VERSION', '5.14.0' );
+define( 'KML_MAP_DIR',     plugin_dir_path( __FILE__ ) );
+define( 'KML_MAP_URL',     plugin_dir_url( __FILE__ ) );
 
-    define( 'KML_MAP_VERSION', '5.12.5' );
-    define( 'KML_MAP_DIR',     plugin_dir_path( __FILE__ ) );
-    define( 'KML_MAP_URL',     plugin_dir_url( __FILE__ ) );
+// Tamaño de celda (en grados) de la cuadrícula usada para repartir cada capa
+// en varios archivos .json pequeños en vez de uno solo enorme, así construir
+// y leer el índice no requiere cargar en memoria los objetos de golpe.
+define( 'KML_MAP_TILE_CELL_SIZE', 0.05 );
 
-    // ---------------------------------------------------------------------------
-    // Freemius: este plugin es 100% gratuito y sin límites (mapas ilimitados,
-    // todas las funciones desbloqueadas). Freemius se usa aquí solo para la
-    // infraestructura de add-ons: cuando publiquemos add-ons de pago (más
-    // formatos de capa, más mapas base), aparecerán en la pestaña "Add-Ons"
-    // del menú de este plugin como productos aparte, no como un desbloqueo de
-    // este mismo plugin.
-    //
-    // 'id' y 'public_key' son los reales del producto "GlocalSaino Layer Map
-    // Viewer" en Freemius.
-    // ---------------------------------------------------------------------------
-    /**
-     * NO QUITAR ESTE IF: es lo que evita que, si en algún momento hay
-     * instaladas a la vez la versión gratuita y la premium (p.ej. justo
-     * después de comprar, antes de borrar la gratuita), ambas registren
-     * por duplicado el menú, el shortcode, la ruta REST, etc. Solo la
-     * primera copia que carga define kml_map_fs() y ejecuta el resto del
-     * plugin; cualquier otra copia solo se registra a sí misma en el SDK
-     * (arriba) y no llega hasta aquí.
-     */
-    if ( ! function_exists( 'kml_map_fs' ) ) {
-        function kml_map_fs() {
-            global $kml_map_fs;
+// Versión del formato del índice espacial (ver kml_map_build_feature_index).
+// Subir este número fuerza a reconstruir en segundo plano el índice de todas
+// las capas ya analizadas con un formato antiguo, sin depender de que
+// alguien pulse "Analizar ahora" a mano.
+//
+// Subida a 5: cambio de un .json por celda (todos sus objetos en un único
+// array, que había que tener enteros en memoria para escribirlo) a
+// .ndjson (un objeto por línea, escrito según se lee del KML). Cualquier
+// índice construido con la versión 4 podía haber quedado incompleto o
+// vacío en capas muy grandes, sin ningún aviso de error visible.
+define( 'KML_MAP_TILE_SCHEMA_VERSION', 5 );
 
-            if ( ! isset( $kml_map_fs ) ) {
-                require_once KML_MAP_DIR . 'vendor/autoload.php';
+// ---------------------------------------------------------------------------
+// Permitir archivos KML en WordPress
+// ---------------------------------------------------------------------------
+add_filter( 'upload_mimes', function ( $mimes ) {
+    $mimes['kml'] = 'application/vnd.google-earth.kml+xml';
+    return $mimes;
+} );
 
-                $kml_map_fs = fs_dynamic_init( [
-                    'id'                  => '36798',
-                    'slug'                => 'glocalsaino-layer-map-viewer',
-                    'type'                => 'plugin',
-                    'public_key'          => 'pk_0963cea084a31793bc106ef8ea5e8',
-                    // Plugin 100% gratuito: no tiene una versión premium de sí
-                    // mismo (eso violaría las normas de WordPress.org de no
-                    // bloquear funciones integradas tras una licencia). Lo que
-                    // sí puede tener son add-ons: productos aparte, no alojados
-                    // en WordPress.org, que se instalan por separado.
-                    'is_premium'          => false,
-                    'has_premium_version' => false,
-                    // A false hasta que exista de verdad un producto add-on
-                    // vinculado en Freemius; se pasa a true en ese momento.
-                    'has_addons'          => false,
-                    'has_paid_plans'      => false,
-                    'is_org_compliant'    => true,
-                    'menu'                => [
-                        'slug'    => 'glocalsaino-maps',
-                        'pricing' => false,
-                    ],
-                ] );
-            }
-
-            return $kml_map_fs;
-        }
-
-        kml_map_fs();
-        do_action( 'kml_map_fs_loaded' );
+add_filter( 'wp_check_filetype_and_ext', function ( $data, $_file, $filename, $_mimes ) {
+    if ( strtolower( pathinfo( $filename, PATHINFO_EXTENSION ) ) === 'kml' ) {
+        $data['ext']  = 'kml';
+        $data['type'] = 'application/vnd.google-earth.kml+xml';
     }
+    return $data;
+}, 10, 4 );
 
-    // Tamaño de celda (en grados) de la cuadrícula usada para repartir cada capa
-    // en varios archivos .json pequeños en vez de uno solo enorme, así construir
-    // y leer el índice no requiere cargar en memoria los objetos de golpe.
-    define( 'KML_MAP_TILE_CELL_SIZE', 0.05 );
+// ---------------------------------------------------------------------------
+// Custom Post Type
+// ---------------------------------------------------------------------------
+add_action( 'init', function () {
+    register_post_type( 'glocalsaino_map', [
+        'public'   => false,
+        'show_ui'  => false,
+        'supports' => [ 'title' ],
+    ] );
+} );
 
-    // Versión del formato del índice espacial (ver kml_map_build_feature_index).
-    // Subir este número fuerza a reconstruir en segundo plano el índice de todas
-    // las capas ya analizadas con un formato antiguo, sin depender de que
-    // alguien pulse "Analizar ahora" a mano.
-    //
-    // Subida a 5: cambio de un .json por celda (todos sus objetos en un único
-    // array, que había que tener enteros en memoria para escribirlo) a
-    // .ndjson (un objeto por línea, escrito según se lee del KML). Cualquier
-    // índice construido con la versión 4 podía haber quedado incompleto o
-    // vacío en capas muy grandes, sin ningún aviso de error visible.
-    define( 'KML_MAP_TILE_SCHEMA_VERSION', 5 );
+// ---------------------------------------------------------------------------
+// Menú de administración
+// ---------------------------------------------------------------------------
+add_action( 'admin_menu', function () {
+    $hook = add_menu_page(
+        __( 'Layer Map Viewer', 'glocalsaino-layer-map-viewer' ),
+        __( 'Layer Map Viewer', 'glocalsaino-layer-map-viewer' ),
+        'upload_files',
+        'glocalsaino-maps',
+        function () { include KML_MAP_DIR . 'admin/admin-page.php'; },
+        'dashicons-location-alt',
+        30
+    );
 
-    // ---------------------------------------------------------------------------
-    // Permitir archivos KML en WordPress
-    // ---------------------------------------------------------------------------
-    add_filter( 'upload_mimes', function ( $mimes ) {
-        $mimes['kml'] = 'application/vnd.google-earth.kml+xml';
-        return $mimes;
-    } );
+    // El JS de esta pantalla (selector de color/relleno/opacidad al
+    // elegir archivos) solo se carga aquí, nunca en el resto del admin.
+    add_action( 'admin_enqueue_scripts', function ( $current_hook ) use ( $hook ) {
+        if ( $current_hook !== $hook ) return;
 
-    add_filter( 'wp_check_filetype_and_ext', function ( $data, $_file, $filename, $_mimes ) {
-        if ( strtolower( pathinfo( $filename, PATHINFO_EXTENSION ) ) === 'kml' ) {
-            $data['ext']  = 'kml';
-            $data['type'] = 'application/vnd.google-earth.kml+xml';
-        }
-        return $data;
-    }, 10, 4 );
-
-    // ---------------------------------------------------------------------------
-    // Custom Post Type
-    // ---------------------------------------------------------------------------
-    add_action( 'init', function () {
-        register_post_type( 'glocalsaino_map', [
-            'public'   => false,
-            'show_ui'  => false,
-            'supports' => [ 'title' ],
+        wp_enqueue_script(
+            'glocalsaino-map-admin-js',
+            KML_MAP_URL . 'assets/js/admin-page.js',
+            [], KML_MAP_VERSION, true
+        );
+        wp_localize_script( 'glocalsaino-map-admin-js', 'GlocalSainoMapAdminI18n', [
+            'file'     => __( 'File', 'glocalsaino-layer-map-viewer' ),
+            'color'    => __( 'Layer color', 'glocalsaino-layer-map-viewer' ),
+            'fill'     => __( 'Fill', 'glocalsaino-layer-map-viewer' ),
+            'noFill'   => __( 'Outline only', 'glocalsaino-layer-map-viewer' ),
+            // Tamaño del marcador (círculo) con el que se dibuja un
+            // objeto de la capa si resulta ser un punto; sin efecto en
+            // polígonos/líneas.
+            'iconSize' => __( 'Marker (px)', 'glocalsaino-layer-map-viewer' ),
         ] );
     } );
+} );
 
-    // ---------------------------------------------------------------------------
-    // Menú de administración
-    // ---------------------------------------------------------------------------
-    add_action( 'admin_menu', function () {
-        $hook = add_menu_page(
-            __( 'Layer Map Viewer', 'glocalsaino-layer-map-viewer' ),
-            __( 'Layer Map Viewer', 'glocalsaino-layer-map-viewer' ),
-            'upload_files',
-            'glocalsaino-maps',
-            function () { include KML_MAP_DIR . 'admin/admin-page.php'; },
-            'dashicons-location-alt',
-            30
-        );
+// ---------------------------------------------------------------------------
+// Submenú "Extensions": anuncia el add-on de pago GlocalSaino External Data
+// Layers (y el resto de la familia de plugins GlocalSaino) dentro del
+// propio admin, con una página propia (nunca un wp_redirect(), que Plugin
+// Check rechaza — ver PHPCS SafeRedirect), igual que se hizo para
+// GlocalSaino WebPagesPassworded/Magic Links y GlocalSaino Auctions
+// Displayed by Shortcodes/Guest Bidding & Deposits. Prioridad PHP_INT_MAX
+// para que quede siempre el último submenú.
+// ---------------------------------------------------------------------------
+add_action( 'admin_menu', function () {
+    add_submenu_page(
+        'glocalsaino-maps',
+        __( 'Extensions', 'glocalsaino-layer-map-viewer' ),
+        __( 'Extensions', 'glocalsaino-layer-map-viewer' ),
+        'upload_files',
+        'glocalsaino-maps-extensions',
+        'kml_map_render_extensions_page'
+    );
+}, PHP_INT_MAX );
 
-        // El JS de esta pantalla (selector de color/relleno/opacidad al
-        // elegir archivos) solo se carga aquí, nunca en el resto del admin.
-        add_action( 'admin_enqueue_scripts', function ( $current_hook ) use ( $hook ) {
-            if ( $current_hook !== $hook ) return;
-
-            wp_enqueue_script(
-                'glocalsaino-map-admin-js',
-                KML_MAP_URL . 'assets/js/admin-page.js',
-                [], KML_MAP_VERSION, true
-            );
-            wp_localize_script( 'glocalsaino-map-admin-js', 'GlocalSainoMapAdminI18n', [
-                'file'     => __( 'File', 'glocalsaino-layer-map-viewer' ),
-                'color'    => __( 'Layer color', 'glocalsaino-layer-map-viewer' ),
-                'fill'     => __( 'Fill', 'glocalsaino-layer-map-viewer' ),
-                'noFill'   => __( 'Outline only', 'glocalsaino-layer-map-viewer' ),
-                // Tamaño del marcador (círculo) con el que se dibuja un
-                // objeto de la capa si resulta ser un punto; sin efecto en
-                // polígonos/líneas.
-                'iconSize' => __( 'Marker (px)', 'glocalsaino-layer-map-viewer' ),
-            ] );
-        } );
-    } );
-
-    // ---------------------------------------------------------------------------
-    // Submenú "Extensions": anuncia el add-on de pago GlocalSaino External Data
-    // Layers dentro del propio admin, con una página propia (nunca un
-    // wp_redirect(), que Plugin Check rechaza — ver PHPCS SafeRedirect) en vez
-    // de depender de la pestaña de add-ons de Freemius (desactivada arriba,
-    // 'pricing' => false), igual que se hizo para GlocalSaino
-    // WebPagesPassworded y su add-on Magic Links. Prioridad PHP_INT_MAX para
-    // que quede siempre el último submenú.
-    // ---------------------------------------------------------------------------
-    add_action( 'admin_menu', function () {
-        add_submenu_page(
-            'glocalsaino-maps',
-            __( 'Extensions', 'glocalsaino-layer-map-viewer' ),
-            __( 'Extensions', 'glocalsaino-layer-map-viewer' ),
-            'upload_files',
-            'glocalsaino-maps-extensions',
-            'kml_map_render_extensions_page'
-        );
-    }, PHP_INT_MAX );
-
-    function kml_map_render_extensions_page() {
-        $banner_url = KML_MAP_URL . 'assets/img/external-data-layers-banner.png';
-        ?>
-        <div class="wrap">
-            <h1><?php esc_html_e( 'Extensions', 'glocalsaino-layer-map-viewer' ); ?></h1>
-
-            <img src="<?php echo esc_url( $banner_url ); ?>"
-                 alt="<?php esc_attr_e( 'GlocalSaino External Data Layers', 'glocalsaino-layer-map-viewer' ); ?>"
-                 style="max-width:772px;width:100%;height:auto;display:block;margin:16px 0 24px;" />
-
-            <p style="font-size:14px;max-width:760px;">
-                <?php esc_html_e( 'GlocalSaino External Data Layers lets you feed this map from a URL or an uploaded file — GeoJSON, KML, GPX, CSV, JSON, XML, or XLSX — with automatic refresh for live sources. It also adds three free base map styles: Topographic, Light, and Dark.', 'glocalsaino-layer-map-viewer' ); ?>
-            </p>
-
-            <ol style="max-width:760px;font-size:14px;line-height:1.8;">
-                <li><strong><?php esc_html_e( 'Track things that move, live.', 'glocalsaino-layer-map-viewer' ); ?></strong>
-                    <?php esc_html_e( 'Point a layer at a URL that changes — vehicle positions, sensor readings, any live feed — and it refreshes itself on the schedule you choose, without you ever touching the map again.', 'glocalsaino-layer-map-viewer' ); ?></li>
-                <li><strong><?php esc_html_e( "Bring in data you already have, in whatever format it's in.", 'glocalsaino-layer-map-viewer' ); ?></strong>
-                    <?php esc_html_e( 'GeoJSON, KML, GPX, CSV, flat JSON, flat XML, or XLSX — no need to convert anything to KML first. For spreadsheet-like sources, just tell it which columns are latitude and longitude.', 'glocalsaino-layer-map-viewer' ); ?></li>
-                <li><strong><?php esc_html_e( 'Three more base map styles, included.', 'glocalsaino-layer-map-viewer' ); ?></strong>
-                    <?php esc_html_e( 'Topographic, Light, and Dark join OpenStreetMap and satellite on every map, new or existing, as soon as the add-on is active.', 'glocalsaino-layer-map-viewer' ); ?></li>
-            </ol>
-
-            <hr style="max-width:760px;margin:24px 0;" />
-
-            <p style="font-size:14px;max-width:760px;">
-                <?php esc_html_e( "A KML upload works well for data you control. It stops working the moment the data doesn't belong to you, or the moment it changes on its own. GlocalSaino External Data Layers is built for exactly that gap.", 'glocalsaino-layer-map-viewer' ); ?>
-            </p>
-
-            <h2><?php esc_html_e( 'Feed a map from data you don\'t control', 'glocalsaino-layer-map-viewer' ); ?></h2>
-            <p style="max-width:760px;font-size:14px;">
-                <?php esc_html_e( "Open data portals, tracking APIs, and internal systems rarely export KML. They export GeoJSON, GPX, CSV, or a JSON/XML endpoint instead. This add-on reads all of them directly — from a URL that refreshes on its own, or from a one-time file upload — so a source you don't control, and can't reshape into KML, still ends up as a normal layer on the map.", 'glocalsaino-layer-map-viewer' ); ?>
-            </p>
-
-            <h2><?php esc_html_e( "Any format, mapped automatically — or in a couple of clicks", 'glocalsaino-layer-map-viewer' ); ?></h2>
-            <p style="max-width:760px;font-size:14px;">
-                <?php esc_html_e( "GeoJSON, KML, and GPX carry their own geometry and just work. For CSV, flat JSON, flat XML, and XLSX — plain spreadsheets and record lists — the add-on detects the available columns or fields and lets you pick which one is latitude and which is longitude, then checks that the choice actually produces real points before adding the layer, so a wrong pick never leaves you with a silently empty map.", 'glocalsaino-layer-map-viewer' ); ?>
-            </p>
-
-            <h2><?php esc_html_e( 'See it live, not just once', 'glocalsaino-layer-map-viewer' ); ?></h2>
-            <p style="max-width:760px;font-size:14px;">
-                <?php esc_html_e( "A URL source can refresh every few minutes or once a day, entirely on its own schedule via WP-Cron. Each live layer shows when it last updated right in the admin panel, and any fetch error is surfaced there too — instead of only reaching a debug log — so a broken feed never fails silently.", 'glocalsaino-layer-map-viewer' ); ?>
-            </p>
-
-            <p style="margin-top:24px;">
-                <a href="https://glocalsaino.com/externaldatalayers/" target="_blank" rel="noopener noreferrer" class="button button-primary button-large">
-                    <?php esc_html_e( 'Learn more and buy →', 'glocalsaino-layer-map-viewer' ); ?>
-                </a>
-            </p>
+// Tarjeta compacta reutilizable (nombre + una frase + estado/CTA) — mismo
+// formato que usa GlocalSaino Auctions Displayed by Shortcodes en su
+// propio "Extensions", para que las tres familias de plugins se vean
+// consistentes entre sí.
+function kml_map_render_extension_card( $name, $description, $active, $url, $icon_url = '' ) {
+    ?>
+    <div style="background:#fff;border:1px solid #ccd0d4;padding:20px;max-width:640px;margin-top:16px;display:flex;gap:16px;align-items:flex-start;">
+        <?php if ( $icon_url ) : ?>
+            <img src="<?php echo esc_url( $icon_url ); ?>" alt="<?php echo esc_attr( $name ); ?>"
+                 width="48" height="48" style="width:48px;height:48px;border-radius:8px;flex-shrink:0;">
+        <?php endif; ?>
+        <div>
+            <h2 style="margin-top:0;"><?php echo esc_html( $name ); ?></h2>
+            <p><?php echo esc_html( $description ); ?></p>
+            <?php if ( $active ) : ?>
+                <p><strong><?php esc_html_e( 'Active', 'glocalsaino-layer-map-viewer' ); ?></strong></p>
+            <?php else : ?>
+                <p>
+                    <a class="button button-primary" href="<?php echo esc_url( $url ); ?>" target="_blank" rel="noopener">
+                        <?php esc_html_e( 'Learn more', 'glocalsaino-layer-map-viewer' ); ?>
+                    </a>
+                </p>
+            <?php endif; ?>
         </div>
+    </div>
+    <?php
+}
+
+function kml_map_render_extensions_page() {
+    ?>
+    <div class="wrap">
+        <h1><?php esc_html_e( 'Extensions', 'glocalsaino-layer-map-viewer' ); ?></h1>
+
         <?php
-    }
+        kml_map_render_extension_card(
+            __( 'GlocalSaino External Data Layers', 'glocalsaino-layer-map-viewer' ),
+            __( 'Feed this map from a URL or an uploaded file — GeoJSON, KML, GPX, CSV, JSON, XML, or XLSX — with automatic refresh for live sources, plus three free base map styles (Topographic, Light, Dark).', 'glocalsaino-layer-map-viewer' ),
+            class_exists( 'GEDL_Admin' ),
+            'https://glocalsaino.com/externaldatalayers/',
+            KML_MAP_URL . 'assets/img/icon-external-data-layers.png'
+        );
+        ?>
 
-    // ---------------------------------------------------------------------------
-    // Helper: analiza un KML en una única pasada en streaming (XMLReader), sin
-    // cargar el archivo entero en memoria ni leerlo varias veces. Extrae a la vez
-    // el rectángulo delimitador, los nombres de campo y los valores únicos del
-    // campo de filtrado. Con archivos de decenas de miles de objetos, escanear el
-    // contenido completo con expresiones regulares —y encima hacerlo varias veces
-    // por archivo, una por cada dato que se necesitaba— podía agotar el tiempo de
-    // ejecución o la memoria de PHP y dejar el admin en blanco.
-    // ---------------------------------------------------------------------------
-    function kml_map_analyze_kml( $path, $filter_field = '' ) {
-        $result = [ 'bounds' => null, 'fields' => [], 'filter_values' => [] ];
+        <h2 style="margin-top:32px;"><?php esc_html_e( 'Built for more than just maps', 'glocalsaino-layer-map-viewer' ); ?></h2>
+        <p style="max-width:760px;font-size:14px;">
+            <?php esc_html_e( "If you're mapping something for sale — a parcel, a property, an asset — pair this plugin with two more free GlocalSaino tools built for exactly that.", 'glocalsaino-layer-map-viewer' ); ?>
+        </p>
 
-        if ( ! file_exists( $path ) || ! class_exists( 'XMLReader' ) ) return $result;
+        <?php
+        kml_map_render_extension_card(
+            __( 'GlocalSaino Auctions Displayed by Shortcodes', 'glocalsaino-layer-map-viewer' ),
+            __( "Turn what's on the map into something biddable. Run a real auction for the item the map is showing — bids, countdown, automatic winner — with one shortcode.", 'glocalsaino-layer-map-viewer' ),
+            class_exists( 'GSADS_Settings' ),
+            'https://glocalsaino.com/auctionsdisplayedbyshortcodes/',
+            KML_MAP_URL . 'assets/img/icon-auctions-displayed-by-shortcodes.png'
+        );
 
-        // Campos técnicos de KML/QGIS que nunca se muestran
-        $hidden_fields = [
-            'timestamp', 'begin', 'end', 'altitudeMode', 'drawOrder',
-            'stroke', 'stroke-opacity', 'stroke-width',
-            'fill', 'fill-opacity', 'fill-color',
-            'tessellate', 'extrude', 'visibility', 'icon',
-        ];
+        kml_map_render_extension_card(
+            __( 'GlocalSaino WebPagesPassworded', 'glocalsaino-layer-map-viewer' ),
+            __( "Show the map only to people who should see it. Password-protect the page where this map lives — useful when a listing shouldn't be public yet.", 'glocalsaino-layer-map-viewer' ),
+            class_exists( 'GlocalSaino_Wppw_Core' ),
+            'https://glocalsaino.com/webpagespassworded/',
+            KML_MAP_URL . 'assets/img/icon-webpagespassworded.png'
+        );
+        ?>
+    </div>
+    <?php
+}
 
-        $reader           = new XMLReader();
-        $prev_use_errors  = libxml_use_internal_errors( true );
+// ---------------------------------------------------------------------------
+// Helper: analiza un KML en una única pasada en streaming (XMLReader), sin
+// cargar el archivo entero en memoria ni leerlo varias veces. Extrae a la vez
+// el rectángulo delimitador, los nombres de campo y los valores únicos del
+// campo de filtrado. Con archivos de decenas de miles de objetos, escanear el
+// contenido completo con expresiones regulares —y encima hacerlo varias veces
+// por archivo, una por cada dato que se necesitaba— podía agotar el tiempo de
+// ejecución o la memoria de PHP y dejar el admin en blanco.
+// ---------------------------------------------------------------------------
+function kml_map_analyze_kml( $path, $filter_field = '' ) {
+    $result = [ 'bounds' => null, 'fields' => [], 'filter_values' => [] ];
 
-        if ( ! @$reader->open( $path, null, LIBXML_NOWARNING | LIBXML_NOERROR ) ) {
-            libxml_use_internal_errors( $prev_use_errors );
-            return $result;
-        }
+    if ( ! file_exists( $path ) || ! class_exists( 'XMLReader' ) ) return $result;
 
-        $south = $west = $north = $east = null;
-        $schema_fields     = [];   // <SimpleField name="..."> (fuente fiable)
-        $simpledata_fields = [];   // <SimpleData name="..."> (fallback si no hay Schema)
-        $filter_values     = [];
+    // Campos técnicos de KML/QGIS que nunca se muestran
+    $hidden_fields = [
+        'timestamp', 'begin', 'end', 'altitudeMode', 'drawOrder',
+        'stroke', 'stroke-opacity', 'stroke-width',
+        'fill', 'fill-opacity', 'fill-color',
+        'tessellate', 'extrude', 'visibility', 'icon',
+    ];
 
-        while ( @$reader->read() ) {
-            if ( $reader->nodeType !== XMLReader::ELEMENT ) continue;
+    $reader           = new XMLReader();
+    $prev_use_errors  = libxml_use_internal_errors( true );
 
-            $local = $reader->localName;
-
-            if ( $local === 'coordinates' ) {
-                $text = $reader->readString();
-                foreach ( preg_split( '/\s+/', trim( $text ) ) as $tuple ) {
-                    if ( $tuple === '' ) continue;
-                    $parts = explode( ',', $tuple );
-                    if ( count( $parts ) < 2 ) continue;
-
-                    $lon = floatval( $parts[0] );
-                    $lat = floatval( $parts[1] );
-
-                    if ( $south === null || $lat < $south ) $south = $lat;
-                    if ( $north === null || $lat > $north ) $north = $lat;
-                    if ( $west  === null || $lon < $west  ) $west  = $lon;
-                    if ( $east  === null || $lon > $east  ) $east  = $lon;
-                }
-            } elseif ( $local === 'SimpleField' ) {
-                $name = $reader->getAttribute( 'name' );
-                if ( $name && ! in_array( $name, $hidden_fields, true ) && ! in_array( $name, $schema_fields, true ) ) {
-                    $schema_fields[] = $name;
-                }
-            } elseif ( $local === 'SimpleData' ) {
-                $name = $reader->getAttribute( 'name' );
-                if ( $name && ! in_array( $name, $hidden_fields, true ) && ! in_array( $name, $simpledata_fields, true ) ) {
-                    $simpledata_fields[] = $name;
-                }
-                // Solo se lee el texto (más costoso que leer el atributo) cuando
-                // es el campo que realmente se está buscando.
-                if ( $filter_field && $name === $filter_field ) {
-                    $value = trim( $reader->readString() );
-                    if ( $value !== '' && ! in_array( $value, $filter_values, true ) ) {
-                        $filter_values[] = $value;
-                    }
-                }
-            }
-        }
-
-        $reader->close();
+    if ( ! @$reader->open( $path, null, LIBXML_NOWARNING | LIBXML_NOERROR ) ) {
         libxml_use_internal_errors( $prev_use_errors );
-
-        $result['bounds']        = $south === null ? null : [ $south, $west, $north, $east ];
-        $result['fields']        = ! empty( $schema_fields ) ? $schema_fields : $simpledata_fields;
-        $result['filter_values'] = $filter_values;
-
         return $result;
     }
 
-    // ---------------------------------------------------------------------------
-    // Helpers de geometría: convierten la geometría de un <Placemark> KML (ya
-    // cargado como DOMElement, ver kml_map_build_feature_index) a geometría
-    // GeoJSON, y calculan su rectángulo delimitador.
-    // ---------------------------------------------------------------------------
-    function kml_map_parse_coordinates_text( $text ) {
-        $coords = [];
-        foreach ( preg_split( '/\s+/', trim( $text ) ) as $tuple ) {
-            if ( $tuple === '' ) continue;
-            $parts = explode( ',', $tuple );
-            if ( count( $parts ) < 2 ) continue;
-            $coords[] = [ floatval( $parts[0] ), floatval( $parts[1] ) ]; // GeoJSON: [lon, lat]
-        }
-        return $coords;
-    }
+    $south = $west = $north = $east = null;
+    $schema_fields     = [];   // <SimpleField name="..."> (fuente fiable)
+    $simpledata_fields = [];   // <SimpleData name="..."> (fallback si no hay Schema)
+    $filter_values     = [];
 
-    function kml_map_dom_geometry( DOMElement $el ) {
-        $tag = $el->localName;
+    while ( @$reader->read() ) {
+        if ( $reader->nodeType !== XMLReader::ELEMENT ) continue;
 
-        if ( $tag === 'Point' || $tag === 'LineString' ) {
-            $coordsEl = $el->getElementsByTagName( 'coordinates' )->item( 0 );
-            if ( ! $coordsEl ) return null;
-            $c = kml_map_parse_coordinates_text( $coordsEl->textContent );
-            if ( ! $c ) return null;
-            return $tag === 'Point'
-                ? [ 'type' => 'Point', 'coordinates' => $c[0] ]
-                : [ 'type' => 'LineString', 'coordinates' => $c ];
-        }
+        $local = $reader->localName;
 
-        if ( $tag === 'Polygon' ) {
-            $rings = [];
-            foreach ( [ 'outerBoundaryIs', 'innerBoundaryIs' ] as $boundary_tag ) {
-                foreach ( $el->getElementsByTagName( $boundary_tag ) as $boundary_el ) {
-                    $coordsEl = $boundary_el->getElementsByTagName( 'coordinates' )->item( 0 );
-                    if ( ! $coordsEl ) continue;
-                    $ring = kml_map_parse_coordinates_text( $coordsEl->textContent );
-                    if ( $ring ) $rings[] = $ring;
-                }
+        if ( $local === 'coordinates' ) {
+            $text = $reader->readString();
+            foreach ( preg_split( '/\s+/', trim( $text ) ) as $tuple ) {
+                if ( $tuple === '' ) continue;
+                $parts = explode( ',', $tuple );
+                if ( count( $parts ) < 2 ) continue;
+
+                $lon = floatval( $parts[0] );
+                $lat = floatval( $parts[1] );
+
+                if ( $south === null || $lat < $south ) $south = $lat;
+                if ( $north === null || $lat > $north ) $north = $lat;
+                if ( $west  === null || $lon < $west  ) $west  = $lon;
+                if ( $east  === null || $lon > $east  ) $east  = $lon;
             }
-            return $rings ? [ 'type' => 'Polygon', 'coordinates' => $rings ] : null;
-        }
-
-        if ( $tag === 'MultiGeometry' ) {
-            $geometries = [];
-            foreach ( $el->childNodes as $child ) {
-                if ( ! ( $child instanceof DOMElement ) ) continue;
-                $g = kml_map_dom_geometry( $child );
-                if ( $g ) $geometries[] = $g;
+        } elseif ( $local === 'SimpleField' ) {
+            $name = $reader->getAttribute( 'name' );
+            if ( $name && ! in_array( $name, $hidden_fields, true ) && ! in_array( $name, $schema_fields, true ) ) {
+                $schema_fields[] = $name;
             }
-            return $geometries ? [ 'type' => 'GeometryCollection', 'geometries' => $geometries ] : null;
-        }
-
-        return null;
-    }
-
-    function kml_map_dom_properties( DOMElement $placemark ) {
-        $props = [];
-        foreach ( $placemark->getElementsByTagName( 'SimpleData' ) as $sd ) {
-            $name = $sd->getAttribute( 'name' );
-            if ( $name ) $props[ $name ] = trim( $sd->textContent );
-        }
-        return $props;
-    }
-
-    function kml_map_geometry_bounds( $geometry ) {
-        $bounds = [ 'south' => null, 'west' => null, 'north' => null, 'east' => null ];
-
-        $walk_coords = function ( $coords ) use ( &$bounds, &$walk_coords ) {
-            if ( isset( $coords[0] ) && is_numeric( $coords[0] ) ) {
-                $lon = $coords[0]; $lat = $coords[1];
-                if ( $bounds['south'] === null || $lat < $bounds['south'] ) $bounds['south'] = $lat;
-                if ( $bounds['north'] === null || $lat > $bounds['north'] ) $bounds['north'] = $lat;
-                if ( $bounds['west']  === null || $lon < $bounds['west']  ) $bounds['west']  = $lon;
-                if ( $bounds['east']  === null || $lon > $bounds['east']  ) $bounds['east']  = $lon;
-                return;
+        } elseif ( $local === 'SimpleData' ) {
+            $name = $reader->getAttribute( 'name' );
+            if ( $name && ! in_array( $name, $hidden_fields, true ) && ! in_array( $name, $simpledata_fields, true ) ) {
+                $simpledata_fields[] = $name;
             }
-            foreach ( $coords as $c ) $walk_coords( $c );
-        };
-
-        // Recorre también GeometryCollection anidadas dentro de otras (una
-        // <MultiGeometry> con otra <MultiGeometry> dentro, caso raro pero válido
-        // en KML), no solo un nivel.
-        $walk_geometry = function ( $g ) use ( &$walk_coords, &$walk_geometry ) {
-            if ( isset( $g['coordinates'] ) ) {
-                $walk_coords( $g['coordinates'] );
-            } elseif ( isset( $g['geometries'] ) ) {
-                foreach ( $g['geometries'] as $sub ) $walk_geometry( $sub );
-            }
-        };
-
-        $walk_geometry( $geometry );
-
-        return $bounds['south'] === null ? null : [ $bounds['south'], $bounds['west'], $bounds['north'], $bounds['east'] ];
-    }
-
-    // Guarda las capas de un mapa con protección: si wp_json_encode()
-    // devolviera false (contenido que no se puede codificar a JSON de forma
-    // válida, algo que en teoría WordPress ya sanea pero que no conviene
-    // dar por imposible), NUNCA se sobrescribe lo que ya hubiera con ese
-    // resultado — mejor dejar el dato anterior intacto que vaciar de golpe
-    // todas las capas del mapa, incluidas las que no tenían nada que ver
-    // con lo que falló. Expuesta (no dentro del closure del plugin) para
-    // que un add-on la use también en vez de escribir el post meta a mano.
-    function kml_map_save_layers( $post_id, array $layers ) {
-        $encoded = wp_json_encode( $layers, JSON_UNESCAPED_UNICODE );
-        if ( false === $encoded ) {
-            if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
-                // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- deliberado y protegido por WP_DEBUG_LOG: este fallo (encode inválido) no tiene otro sitio donde avisar, y solo se registra si el propio sitio ya pidió depuración.
-                error_log( '[GlocalSaino Layer Map Viewer] No se han podido guardar las capas del mapa ' . $post_id . ': wp_json_encode() ha fallado.' );
-            }
-            return false;
-        }
-        update_post_meta( $post_id, '_glocalsaino_map_layers', $encoded );
-        return true;
-    }
-
-    // Lee las capas de un mapa con la misma protección que kml_map_save_layers()
-    // pero del lado contrario: '' (el meta nunca se ha guardado) es un mapa
-    // nuevo sin capas, y devuelve []. Pero si el meta NO está vacío y aun así
-    // json_decode() no lo puede interpretar (dato corrupto por el motivo que
-    // sea: edición manual, un fallo puntual de la base de datos, etc.),
-    // devuelve null en vez de [] — quien llame nunca debe confundir "dato
-    // corrupto" con "todavía no hay capas", o la siguiente acción normal del
-    // usuario (añadir una capa, cambiar el campo de filtro, "Analizar
-    // ahora"...) sobrescribiría sin darse cuenta las capas ya existentes con
-    // una lista vacía, perdiéndolas de golpe. Expuesta para que un add-on la
-    // use también en vez de decodificar el post meta a mano.
-    function kml_map_get_layers( $post_id ) {
-        $raw = get_post_meta( $post_id, '_glocalsaino_map_layers', true );
-        if ( '' === $raw ) return [];
-        $layers = json_decode( $raw, true );
-        return is_array( $layers ) ? $layers : null;
-    }
-
-    // Helper: carpeta de caché (índice espacial) de una capa, derivada de su URL.
-    // No depende de la posición de la capa en el array (que cambia si se borran
-    // otras capas antes), y el hash impide cualquier problema de ruta con el
-    // parámetro que llegue al endpoint público que sirve estas celdas.
-    function kml_map_tile_dir( $layer_url ) {
-        $upload_dir = wp_upload_dir();
-        return trailingslashit( $upload_dir['basedir'] ) . 'kml-map-tiles/' . md5( $layer_url );
-    }
-
-    // ¿El índice espacial de esta capa existe y está en el formato actual? Si
-    // KML_MAP_TILE_SCHEMA_VERSION ha subido (p.ej. porque se añadió un dato
-    // nuevo por objeto), esto devuelve false para índices antiguos, así se
-    // reconstruyen solos en segundo plano sin intervención manual.
-    function kml_map_tile_index_current( $tile_dir ) {
-        $schema_file = trailingslashit( $tile_dir ) . '.schema';
-        if ( ! is_dir( $tile_dir ) || ! file_exists( $schema_file ) ) return false;
-        return trim( (string) file_get_contents( $schema_file ) ) === (string) KML_MAP_TILE_SCHEMA_VERSION;
-    }
-
-    function kml_map_delete_dir_recursive( $dir ) {
-        if ( ! is_dir( $dir ) ) return;
-
-        global $wp_filesystem;
-        if ( empty( $wp_filesystem ) ) {
-            require_once ABSPATH . 'wp-admin/includes/file.php';
-            WP_Filesystem();
-        }
-
-        $wp_filesystem->delete( $dir, true );
-    }
-
-    // ---------------------------------------------------------------------------
-    // Construye el índice espacial de una capa: reparte sus objetos en una
-    // cuadrícula de celdas (una carpeta con un archivo por celda) para que
-    // servir la capa se haga leyendo varios archivos pequeños en vez de uno
-    // solo con los 63.000+ objetos de golpe. También calcula, de paso y sin
-    // coste adicional, el rectángulo que engloba los objetos de cada valor
-    // del campo de filtrado, para poder encuadrar el mapa a ellos sin
-    // descargar la capa.
-    //
-    // Cada objeto se escribe en su archivo de celda (formato NDJSON: una
-    // línea = un objeto) nada más leerlo, en vez de acumular los objetos de
-    // toda la capa en un array en memoria y escribir solo al final: con una
-    // capa de decenas de miles de objetos, acumular todo antes de escribir
-    // agotaba la memoria de PHP incluso con wp_raise_memory_limit(), y como
-    // eso pasa siempre a mitad del bucle de lectura, nunca se llegaba a
-    // escribir ni un solo archivo — la capa quedaba con "analyzed" a true
-    // (los campos/valores de filtro sí se calculan aparte, en un paso ligero
-    // que si termina) pero sin ningún objeto que servir en el front-end.
-    // ---------------------------------------------------------------------------
-    function kml_map_build_feature_index( $path, $out_dir, $filter_field = '' ) {
-        $value_bounds = [];
-
-        if ( ! file_exists( $path ) || ! class_exists( 'XMLReader' ) || ! class_exists( 'DOMDocument' ) ) {
-            return $value_bounds;
-        }
-
-        if ( ! file_exists( $out_dir ) ) wp_mkdir_p( $out_dir );
-        foreach ( glob( trailingslashit( $out_dir ) . '*' ) ?: [] as $old ) {
-            if ( is_file( $old ) ) wp_delete_file( $old );
-        }
-
-        $reader          = new XMLReader();
-        $prev_use_errors = libxml_use_internal_errors( true );
-
-        if ( ! @$reader->open( $path, null, LIBXML_NOWARNING | LIBXML_NOERROR ) ) {
-            libxml_use_internal_errors( $prev_use_errors );
-            return $value_bounds;
-        }
-
-        $cell_size = KML_MAP_TILE_CELL_SIZE;
-
-        while ( @$reader->read() ) {
-            if ( $reader->nodeType !== XMLReader::ELEMENT || $reader->localName !== 'Placemark' ) continue;
-
-            $node = $reader->expand();
-            if ( ! $node ) continue;
-
-            $dom         = new DOMDocument();
-            $placemarkEl = $dom->appendChild( $dom->importNode( $node, true ) );
-
-            $geometry = null;
-            foreach ( $placemarkEl->childNodes as $child ) {
-                if ( $child instanceof DOMElement
-                    && in_array( $child->localName, [ 'Point', 'LineString', 'Polygon', 'MultiGeometry' ], true ) ) {
-                    $geometry = kml_map_dom_geometry( $child );
-                    break;
-                }
-            }
-            if ( ! $geometry ) continue;
-
-            $bounds = kml_map_geometry_bounds( $geometry );
-            if ( ! $bounds ) continue;
-
-            $properties = kml_map_dom_properties( $placemarkEl );
-
-            $cx  = (int) floor( ( ( $bounds[1] + $bounds[3] ) / 2 ) / $cell_size );
-            $cy  = (int) floor( ( ( $bounds[0] + $bounds[2] ) / 2 ) / $cell_size );
-            $key = $cx . '_' . $cy;
-
-            // file_put_contents() con FILE_APPEND (no fopen/fwrite persistentes,
-            // que las normas de WordPress.org no permiten): añade la línea al
-            // final del archivo de esta celda, abriendo y cerrando el archivo
-            // en cada llamada. Sigue sin acumular en memoria los objetos de
-            // toda la capa, que es lo que agotaba la memoria con capas grandes.
-            file_put_contents(
-                trailingslashit( $out_dir ) . $key . '.ndjson',
-                wp_json_encode( [
-                    'geometry'   => $geometry,
-                    'bounds'     => $bounds,
-                    'properties' => $properties,
-                ], JSON_UNESCAPED_UNICODE ) . "\n",
-                FILE_APPEND | LOCK_EX
-            );
-
-            if ( $filter_field && isset( $properties[ $filter_field ] ) && $properties[ $filter_field ] !== '' ) {
-                $v = $properties[ $filter_field ];
-                if ( ! isset( $value_bounds[ $v ] ) ) {
-                    $value_bounds[ $v ] = $bounds;
-                } else {
-                    $vb = $value_bounds[ $v ];
-                    $value_bounds[ $v ] = [
-                        min( $vb[0], $bounds[0] ), min( $vb[1], $bounds[1] ),
-                        max( $vb[2], $bounds[2] ), max( $vb[3], $bounds[3] ),
-                    ];
+            // Solo se lee el texto (más costoso que leer el atributo) cuando
+            // es el campo que realmente se está buscando.
+            if ( $filter_field && $name === $filter_field ) {
+                $value = trim( $reader->readString() );
+                if ( $value !== '' && ! in_array( $value, $filter_values, true ) ) {
+                    $filter_values[] = $value;
                 }
             }
         }
-
-        $reader->close();
-        libxml_use_internal_errors( $prev_use_errors );
-
-        file_put_contents( trailingslashit( $out_dir ) . '.schema', (string) KML_MAP_TILE_SCHEMA_VERSION );
-
-        return $value_bounds;
     }
 
-    // ---------------------------------------------------------------------------
-    // Helper: ¿alguno de los archivos subidos superó upload_max_filesize o
-    // post_max_size (límite del propio PHP/hosting)? En ese caso PHP marca el
-    // archivo con error UPLOAD_ERR_INI_SIZE/FORM_SIZE, kml_map_upload_files()
-    // lo descarta como cualquier otro fallo, y sin esta comprobación el
-    // usuario recibía el mismo aviso genérico de "extensión no válida" aunque
-    // el archivo sí fuera .kml — confuso y no decía lo que realmente pasaba.
-    // ---------------------------------------------------------------------------
-    function kml_map_upload_exceeds_size_limit( $files_array ) {
-        foreach ( (array) ( $files_array['error'] ?? [] ) as $error_code ) {
-            if ( in_array( (int) $error_code, [ UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE ], true ) ) {
-                return true;
+    $reader->close();
+    libxml_use_internal_errors( $prev_use_errors );
+
+    $result['bounds']        = $south === null ? null : [ $south, $west, $north, $east ];
+    $result['fields']        = ! empty( $schema_fields ) ? $schema_fields : $simpledata_fields;
+    $result['filter_values'] = $filter_values;
+
+    return $result;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers de geometría: convierten la geometría de un <Placemark> KML (ya
+// cargado como DOMElement, ver kml_map_build_feature_index) a geometría
+// GeoJSON, y calculan su rectángulo delimitador.
+// ---------------------------------------------------------------------------
+function kml_map_parse_coordinates_text( $text ) {
+    $coords = [];
+    foreach ( preg_split( '/\s+/', trim( $text ) ) as $tuple ) {
+        if ( $tuple === '' ) continue;
+        $parts = explode( ',', $tuple );
+        if ( count( $parts ) < 2 ) continue;
+        $coords[] = [ floatval( $parts[0] ), floatval( $parts[1] ) ]; // GeoJSON: [lon, lat]
+    }
+    return $coords;
+}
+
+function kml_map_dom_geometry( DOMElement $el ) {
+    $tag = $el->localName;
+
+    if ( $tag === 'Point' || $tag === 'LineString' ) {
+        $coordsEl = $el->getElementsByTagName( 'coordinates' )->item( 0 );
+        if ( ! $coordsEl ) return null;
+        $c = kml_map_parse_coordinates_text( $coordsEl->textContent );
+        if ( ! $c ) return null;
+        return $tag === 'Point'
+            ? [ 'type' => 'Point', 'coordinates' => $c[0] ]
+            : [ 'type' => 'LineString', 'coordinates' => $c ];
+    }
+
+    if ( $tag === 'Polygon' ) {
+        $rings = [];
+        foreach ( [ 'outerBoundaryIs', 'innerBoundaryIs' ] as $boundary_tag ) {
+            foreach ( $el->getElementsByTagName( $boundary_tag ) as $boundary_el ) {
+                $coordsEl = $boundary_el->getElementsByTagName( 'coordinates' )->item( 0 );
+                if ( ! $coordsEl ) continue;
+                $ring = kml_map_parse_coordinates_text( $coordsEl->textContent );
+                if ( $ring ) $rings[] = $ring;
             }
+        }
+        return $rings ? [ 'type' => 'Polygon', 'coordinates' => $rings ] : null;
+    }
+
+    if ( $tag === 'MultiGeometry' ) {
+        $geometries = [];
+        foreach ( $el->childNodes as $child ) {
+            if ( ! ( $child instanceof DOMElement ) ) continue;
+            $g = kml_map_dom_geometry( $child );
+            if ( $g ) $geometries[] = $g;
+        }
+        return $geometries ? [ 'type' => 'GeometryCollection', 'geometries' => $geometries ] : null;
+    }
+
+    return null;
+}
+
+function kml_map_dom_properties( DOMElement $placemark ) {
+    $props = [];
+    foreach ( $placemark->getElementsByTagName( 'SimpleData' ) as $sd ) {
+        $name = $sd->getAttribute( 'name' );
+        if ( $name ) $props[ $name ] = trim( $sd->textContent );
+    }
+    return $props;
+}
+
+function kml_map_geometry_bounds( $geometry ) {
+    $bounds = [ 'south' => null, 'west' => null, 'north' => null, 'east' => null ];
+
+    $walk_coords = function ( $coords ) use ( &$bounds, &$walk_coords ) {
+        if ( isset( $coords[0] ) && is_numeric( $coords[0] ) ) {
+            $lon = $coords[0]; $lat = $coords[1];
+            if ( $bounds['south'] === null || $lat < $bounds['south'] ) $bounds['south'] = $lat;
+            if ( $bounds['north'] === null || $lat > $bounds['north'] ) $bounds['north'] = $lat;
+            if ( $bounds['west']  === null || $lon < $bounds['west']  ) $bounds['west']  = $lon;
+            if ( $bounds['east']  === null || $lon > $bounds['east']  ) $bounds['east']  = $lon;
+            return;
+        }
+        foreach ( $coords as $c ) $walk_coords( $c );
+    };
+
+    // Recorre también GeometryCollection anidadas dentro de otras (una
+    // <MultiGeometry> con otra <MultiGeometry> dentro, caso raro pero válido
+    // en KML), no solo un nivel.
+    $walk_geometry = function ( $g ) use ( &$walk_coords, &$walk_geometry ) {
+        if ( isset( $g['coordinates'] ) ) {
+            $walk_coords( $g['coordinates'] );
+        } elseif ( isset( $g['geometries'] ) ) {
+            foreach ( $g['geometries'] as $sub ) $walk_geometry( $sub );
+        }
+    };
+
+    $walk_geometry( $geometry );
+
+    return $bounds['south'] === null ? null : [ $bounds['south'], $bounds['west'], $bounds['north'], $bounds['east'] ];
+}
+
+// Guarda las capas de un mapa con protección: si wp_json_encode()
+// devolviera false (contenido que no se puede codificar a JSON de forma
+// válida, algo que en teoría WordPress ya sanea pero que no conviene
+// dar por imposible), NUNCA se sobrescribe lo que ya hubiera con ese
+// resultado — mejor dejar el dato anterior intacto que vaciar de golpe
+// todas las capas del mapa, incluidas las que no tenían nada que ver
+// con lo que falló. Expuesta (no dentro del closure del plugin) para
+// que un add-on la use también en vez de escribir el post meta a mano.
+function kml_map_save_layers( $post_id, array $layers ) {
+    $encoded = wp_json_encode( $layers, JSON_UNESCAPED_UNICODE );
+    if ( false === $encoded ) {
+        if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
+            // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- deliberado y protegido por WP_DEBUG_LOG: este fallo (encode inválido) no tiene otro sitio donde avisar, y solo se registra si el propio sitio ya pidió depuración.
+            error_log( '[GlocalSaino Layer Map Viewer] No se han podido guardar las capas del mapa ' . $post_id . ': wp_json_encode() ha fallado.' );
         }
         return false;
     }
+    update_post_meta( $post_id, '_glocalsaino_map_layers', $encoded );
+    return true;
+}
 
-    // ---------------------------------------------------------------------------
-    // Helper: sube un array de archivos KML y crea la entrada de cada capa SIN
-    // analizarla todavía (bounds/campos/valores de filtro). El análisis se hace
-    // después en segundo plano (ver kml_map_run_analysis): así la subida responde
-    // al instante sin importar cuántos objetos tenga el KML, y sin depender de
-    // los límites de tiempo de ejecución del servidor.
-    // ---------------------------------------------------------------------------
-    function kml_map_upload_files( $files_array, $colors = [], $no_fill = [], $opacity = [], $icon_sizes = [] ) {
+// Lee las capas de un mapa con la misma protección que kml_map_save_layers()
+// pero del lado contrario: '' (el meta nunca se ha guardado) es un mapa
+// nuevo sin capas, y devuelve []. Pero si el meta NO está vacío y aun así
+// json_decode() no lo puede interpretar (dato corrupto por el motivo que
+// sea: edición manual, un fallo puntual de la base de datos, etc.),
+// devuelve null en vez de [] — quien llame nunca debe confundir "dato
+// corrupto" con "todavía no hay capas", o la siguiente acción normal del
+// usuario (añadir una capa, cambiar el campo de filtro, "Analizar
+// ahora"...) sobrescribiría sin darse cuenta las capas ya existentes con
+// una lista vacía, perdiéndolas de golpe. Expuesta para que un add-on la
+// use también en vez de decodificar el post meta a mano.
+function kml_map_get_layers( $post_id ) {
+    $raw = get_post_meta( $post_id, '_glocalsaino_map_layers', true );
+    if ( '' === $raw ) return [];
+    $layers = json_decode( $raw, true );
+    return is_array( $layers ) ? $layers : null;
+}
+
+// Helper: carpeta de caché (índice espacial) de una capa, derivada de su URL.
+// No depende de la posición de la capa en el array (que cambia si se borran
+// otras capas antes), y el hash impide cualquier problema de ruta con el
+// parámetro que llegue al endpoint público que sirve estas celdas.
+function kml_map_tile_dir( $layer_url ) {
+    $upload_dir = wp_upload_dir();
+    return trailingslashit( $upload_dir['basedir'] ) . 'kml-map-tiles/' . md5( $layer_url );
+}
+
+// ¿El índice espacial de esta capa existe y está en el formato actual? Si
+// KML_MAP_TILE_SCHEMA_VERSION ha subido (p.ej. porque se añadió un dato
+// nuevo por objeto), esto devuelve false para índices antiguos, así se
+// reconstruyen solos en segundo plano sin intervención manual.
+function kml_map_tile_index_current( $tile_dir ) {
+    $schema_file = trailingslashit( $tile_dir ) . '.schema';
+    if ( ! is_dir( $tile_dir ) || ! file_exists( $schema_file ) ) return false;
+    return trim( (string) file_get_contents( $schema_file ) ) === (string) KML_MAP_TILE_SCHEMA_VERSION;
+}
+
+function kml_map_delete_dir_recursive( $dir ) {
+    if ( ! is_dir( $dir ) ) return;
+
+    global $wp_filesystem;
+    if ( empty( $wp_filesystem ) ) {
         require_once ABSPATH . 'wp-admin/includes/file.php';
-
-        $layers      = [];
-        $count       = count( $files_array['name'] );
-        $color_index = 0;
-
-        for ( $i = 0; $i < $count; $i++ ) {
-            if ( $files_array['error'][ $i ] !== UPLOAD_ERR_OK ) continue;
-
-            // Nombre saneado una sola vez aquí; se usa tanto para comprobar
-            // la extensión como para el nombre de la capa (más abajo) y lo
-            // que se pasa a wp_handle_upload(), que ya vuelve a sanearlo por
-            // su cuenta al mover el archivo a su ubicación final.
-            $filename = sanitize_file_name( wp_unslash( $files_array['name'][ $i ] ) );
-
-            $ext = strtolower( pathinfo( $filename, PATHINFO_EXTENSION ) );
-            if ( $ext !== 'kml' ) continue;
-
-            $single = [
-                'name'     => $filename,
-                'type'     => sanitize_mime_type( $files_array['type'][ $i ] ),
-                'tmp_name' => $files_array['tmp_name'][ $i ],
-                'error'    => $files_array['error'][ $i ],
-                'size'     => $files_array['size'][ $i ],
-            ];
-
-            $upload = wp_handle_upload( $single, [ 'test_form' => false ] );
-            if ( isset( $upload['error'] ) ) continue;
-
-            $color = isset( $colors[ $color_index ] )
-                ? sanitize_hex_color( $colors[ $color_index ] )
-                : '';
-
-            // Nivel de relleno (0-100 en el formulario) a fracción 0-1; 0.6 por
-            // defecto si no llega nada, igual que el valor fijo que se usaba
-            // antes de poder personalizarlo.
-            $opacity_pct   = isset( $opacity[ $color_index ] ) ? (int) $opacity[ $color_index ] : 60;
-            $opacity_value = max( 0, min( 100, $opacity_pct ) ) / 100;
-
-            // Solo tiene efecto si los objetos de la capa resultan ser puntos
-            // (p.ej. una capa de un add-on con datos de una fuente externa);
-            // en polígonos/líneas no cambia nada visible, igual que pasa con
-            // "Solo borde" en un punto. El marcador de un punto siempre es un
-            // círculo del color de la capa; lo único configurable es su radio.
-            $icon_size = isset( $icon_sizes[ $color_index ] ) ? max( 4, min( 60, (int) $icon_sizes[ $color_index ] ) ) : 8;
-
-            $layers[] = [
-                'url'             => esc_url_raw( $upload['url'] ),
-                'name'            => pathinfo( $filename, PATHINFO_FILENAME ),
-                'color'           => $color,
-                'fill'            => empty( $no_fill[ $color_index ] ),
-                'opacity'         => $opacity_value,
-                'point_icon_size' => $icon_size,
-                'bounds'          => null,
-                'analyzed'        => false,
-            ];
-            $color_index++;
-        }
-
-        return $layers;
+        WP_Filesystem();
     }
 
-    // Helper: convierte una URL del directorio de subidas a ruta absoluta en disco
-    function kml_map_url_to_path( $url ) {
-        $upload_dir  = wp_upload_dir();
-        $base_path   = wp_parse_url( $upload_dir['baseurl'], PHP_URL_PATH );
-        $file_path   = wp_parse_url( $url, PHP_URL_PATH );
-        $relative    = substr( $file_path, strlen( $base_path ) );
-        return $upload_dir['basedir'] . $relative;
+    $wp_filesystem->delete( $dir, true );
+}
+
+// ---------------------------------------------------------------------------
+// Construye el índice espacial de una capa: reparte sus objetos en una
+// cuadrícula de celdas (una carpeta con un archivo por celda) para que
+// servir la capa se haga leyendo varios archivos pequeños en vez de uno
+// solo con los 63.000+ objetos de golpe. También calcula, de paso y sin
+// coste adicional, el rectángulo que engloba los objetos de cada valor
+// del campo de filtrado, para poder encuadrar el mapa a ellos sin
+// descargar la capa.
+//
+// Cada objeto se escribe en su archivo de celda (formato NDJSON: una
+// línea = un objeto) nada más leerlo, en vez de acumular los objetos de
+// toda la capa en un array en memoria y escribir solo al final: con una
+// capa de decenas de miles de objetos, acumular todo antes de escribir
+// agotaba la memoria de PHP incluso con wp_raise_memory_limit(), y como
+// eso pasa siempre a mitad del bucle de lectura, nunca se llegaba a
+// escribir ni un solo archivo — la capa quedaba con "analyzed" a true
+// (los campos/valores de filtro sí se calculan aparte, en un paso ligero
+// que si termina) pero sin ningún objeto que servir en el front-end.
+// ---------------------------------------------------------------------------
+function kml_map_build_feature_index( $path, $out_dir, $filter_field = '' ) {
+    $value_bounds = [];
+
+    if ( ! file_exists( $path ) || ! class_exists( 'XMLReader' ) || ! class_exists( 'DOMDocument' ) ) {
+        return $value_bounds;
     }
 
-    // ---------------------------------------------------------------------------
-    // Procesamiento en segundo plano (WP-Cron): el análisis de cada KML (bounds,
-    // campos, valores de filtro) se hace fuera de la petición que ve el
-    // navegador. Un archivo de decenas de miles de objetos puede tardar más de
-    // lo que el servidor (PHP, Nginx/Apache o un proxy delante) permite para una
-    // sola petición HTTP; en segundo plano no hay ese límite.
-    // ---------------------------------------------------------------------------
-    add_action( 'kml_map_analyze_cron', 'kml_map_run_analysis' );
-
-    function kml_map_schedule_analysis( $post_id ) {
-        if ( ! wp_next_scheduled( 'kml_map_analyze_cron', [ $post_id ] ) ) {
-            wp_schedule_single_event( time(), 'kml_map_analyze_cron', [ $post_id ] );
-        }
-        // Intenta arrancar el cron ya mismo en vez de esperar a la próxima visita al sitio.
-        if ( function_exists( 'spawn_cron' ) ) spawn_cron();
+    if ( ! file_exists( $out_dir ) ) wp_mkdir_p( $out_dir );
+    foreach ( glob( trailingslashit( $out_dir ) . '*' ) ?: [] as $old ) {
+        if ( is_file( $old ) ) wp_delete_file( $old );
     }
 
-    function kml_map_run_analysis( $post_id ) {
-        // Necesario: analizar un KML de decenas de miles de objetos puede
-        // tardar más que el límite de ejecución por defecto. Esto corre en
-        // WP-Cron (nunca en una petición que vea el navegador), y ya está
-        // protegido por si el hosting lo tiene deshabilitado.
-        //
-        // Ya escrito con llaves (en vez de "if (...) sentencia;" en una sola
-        // línea) porque el empaquetador de Freemius, al generar la versión
-        // gratuita, reescribe cualquier "if" de una sola línea a un bloque
-        // con llaves y, al hacerlo, mueve el comentario que le siga a otro
-        // sitio (lo reengancha como comentario del SIGUIENTE statement, no
-        // del que queda dentro del bloque). Escribiéndolo ya así, con el
-        // phpcs:ignore como comentario propio justo encima de la línea real,
-        // no hay nada que reescribir y el comentario se queda donde debe.
-        if ( function_exists( 'set_time_limit' ) ) {
-            // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged
-            @set_time_limit( 0 );
+    $reader          = new XMLReader();
+    $prev_use_errors = libxml_use_internal_errors( true );
+
+    if ( ! @$reader->open( $path, null, LIBXML_NOWARNING | LIBXML_NOERROR ) ) {
+        libxml_use_internal_errors( $prev_use_errors );
+        return $value_bounds;
+    }
+
+    $cell_size = KML_MAP_TILE_CELL_SIZE;
+
+    while ( @$reader->read() ) {
+        if ( $reader->nodeType !== XMLReader::ELEMENT || $reader->localName !== 'Placemark' ) continue;
+
+        $node = $reader->expand();
+        if ( ! $node ) continue;
+
+        $dom         = new DOMDocument();
+        $placemarkEl = $dom->appendChild( $dom->importNode( $node, true ) );
+
+        $geometry = null;
+        foreach ( $placemarkEl->childNodes as $child ) {
+            if ( $child instanceof DOMElement
+                && in_array( $child->localName, [ 'Point', 'LineString', 'Polygon', 'MultiGeometry' ], true ) ) {
+                $geometry = kml_map_dom_geometry( $child );
+                break;
+            }
         }
-        if ( function_exists( 'wp_raise_memory_limit' ) ) wp_raise_memory_limit( 'admin' );
+        if ( ! $geometry ) continue;
 
-        $layers = kml_map_get_layers( $post_id );
-        if ( empty( $layers ) ) return;
+        $bounds = kml_map_geometry_bounds( $geometry );
+        if ( ! $bounds ) continue;
 
-        // Sin campo de filtro configurado (versión gratuita, o premium que aún
-        // no lo ha elegido en "Campos del popup"), no se filtra nada: no tiene
-        // sentido buscar valores de un campo por defecto que puede ni existir
-        // en el KML de quien lo use.
-        $filter_field    = get_post_meta( $post_id, '_glocalsaino_map_filter_field', true ) ?: '';
-        $fields          = json_decode( get_post_meta( $post_id, '_glocalsaino_map_fields_available', true ), true ) ?: [];
-        // Qué capa(s) tienen cada campo (por nombre de capa): distintas capas
-        // pueden traer un campo con el mismo nombre pero significados
-        // distintos, así que en el panel se muestra junto a qué capa(s)
-        // aparece cada uno, en vez de una lista plana sin esa referencia.
-        $fields_by_layer = json_decode( get_post_meta( $post_id, '_glocalsaino_map_fields_by_layer', true ), true ) ?: [];
-        $filter_values   = json_decode( get_post_meta( $post_id, '_glocalsaino_map_filter_values', true ), true ) ?: [];
-        $value_bounds    = json_decode( get_post_meta( $post_id, '_glocalsaino_map_filter_value_bounds', true ), true ) ?: [];
+        $properties = kml_map_dom_properties( $placemarkEl );
 
-        foreach ( $layers as $idx => $layer ) {
-            // Una capa que ya tenía 'analyzed' de antes de existir el índice
-            // espacial, o cuyo índice está en un formato antiguo (ver
-            // KML_MAP_TILE_SCHEMA_VERSION), no debe darse por completa: si no,
-            // nunca se reconstruye y el endpoint sirve datos incompletos.
-            $tile_dir = kml_map_tile_dir( $layer['url'] );
-            if ( ! empty( $layer['analyzed'] ) && kml_map_tile_index_current( $tile_dir ) ) continue;
+        $cx  = (int) floor( ( ( $bounds[1] + $bounds[3] ) / 2 ) / $cell_size );
+        $cy  = (int) floor( ( ( $bounds[0] + $bounds[2] ) / 2 ) / $cell_size );
+        $key = $cx . '_' . $cy;
 
-            // Tipo de capa: 'kml' (subida de archivo, comportamiento de
-            // siempre) es el único que trae este plugin. Los add-ons (p.ej.
-            // fuentes de datos externas vía URL) pueden registrar tipos
-            // adicionales con el filtro 'glocalsaino_map_layer_types',
-            // devolviendo, por tipo, un array con las funciones 'analyze' y
-            // 'build_index' que sustituyen a kml_map_analyze_kml()/
-            // kml_map_build_feature_index() para ese tipo de capa. Así el
-            // resto de este bucle (agregación de campos, valores de filtro,
-            // guardado incremental) no necesita saber nada del origen real
-            // de los datos.
-            $layer_type = $layer['type'] ?? 'kml';
+        // file_put_contents() con FILE_APPEND (no fopen/fwrite persistentes,
+        // que las normas de WordPress.org no permiten): añade la línea al
+        // final del archivo de esta celda, abriendo y cerrando el archivo
+        // en cada llamada. Sigue sin acumular en memoria los objetos de
+        // toda la capa, que es lo que agotaba la memoria con capas grandes.
+        file_put_contents(
+            trailingslashit( $out_dir ) . $key . '.ndjson',
+            wp_json_encode( [
+                'geometry'   => $geometry,
+                'bounds'     => $bounds,
+                'properties' => $properties,
+            ], JSON_UNESCAPED_UNICODE ) . "\n",
+            FILE_APPEND | LOCK_EX
+        );
 
-            if ( 'kml' === $layer_type ) {
-                $path        = kml_map_url_to_path( $layer['url'] );
-                $has_source  = file_exists( $path );
-                $analysis    = $has_source
-                    ? kml_map_analyze_kml( $path, $filter_field )
-                    : [ 'bounds' => null, 'fields' => [], 'filter_values' => [] ];
-                $build_index = static function () use ( $path, $tile_dir, $filter_field ) {
-                    return kml_map_build_feature_index( $path, $tile_dir, $filter_field );
-                };
+        if ( $filter_field && isset( $properties[ $filter_field ] ) && $properties[ $filter_field ] !== '' ) {
+            $v = $properties[ $filter_field ];
+            if ( ! isset( $value_bounds[ $v ] ) ) {
+                $value_bounds[ $v ] = $bounds;
             } else {
-                $layer_handlers = apply_filters( 'glocalsaino_map_layer_types', [] );
-                $handler        = $layer_handlers[ $layer_type ] ?? null;
-
-                // Tipo desconocido (add-on desactivado, o mapa con una capa
-                // de un add-on que ya no está instalado): se deja tal cual,
-                // sin marcarla como analizada, en vez de romper el resto del
-                // mapa o borrar los datos que tuviera.
-                if ( ! $handler || empty( $handler['analyze'] ) || empty( $handler['build_index'] ) ) continue;
-
-                $has_source  = true;
-                $analysis    = call_user_func( $handler['analyze'], $layer, $filter_field );
-                $build_index = static function () use ( $handler, $layer, $tile_dir, $filter_field ) {
-                    return call_user_func( $handler['build_index'], $layer, $tile_dir, $filter_field );
-                };
+                $vb = $value_bounds[ $v ];
+                $value_bounds[ $v ] = [
+                    min( $vb[0], $bounds[0] ), min( $vb[1], $bounds[1] ),
+                    max( $vb[2], $bounds[2] ), max( $vb[3], $bounds[3] ),
+                ];
             }
-
-            $layers[ $idx ]['bounds']     = $analysis['bounds'];
-            $layers[ $idx ]['analyzed']   = true;
-            // Genérico: si el 'analyze' de este tipo de capa (KML no lo usa;
-            // los add-ons con una fuente de datos externa sí pueden) informa
-            // de por qué no encontró datos, se guarda para poder mostrarlo en
-            // el admin — si no, un fallo silencioso (URL caída, JSON sin el
-            // campo esperado, etc.) solo se veía en el log de depuración.
-            $layers[ $idx ]['last_error'] = $analysis['error'] ?? '';
-
-            $layer_name = $layer['name'] ?? '';
-            foreach ( $analysis['fields'] as $f ) {
-                if ( ! in_array( $f, $fields, true ) ) $fields[] = $f;
-
-                if ( ! isset( $fields_by_layer[ $f ] ) ) $fields_by_layer[ $f ] = [];
-                if ( $layer_name && ! in_array( $layer_name, $fields_by_layer[ $f ], true ) ) {
-                    $fields_by_layer[ $f ][] = $layer_name;
-                }
-            }
-            foreach ( $analysis['filter_values'] as $v ) {
-                if ( ! in_array( $v, $filter_values, true ) ) $filter_values[] = $v;
-            }
-
-            // Índice de la capa: reparte sus objetos en varios archivos NDJSON
-            // pequeños (ver el endpoint REST más abajo, que los pagina) en vez de
-            // uno solo con todos los objetos de golpe. De paso calcula el
-            // rectángulo que engloba los objetos de cada valor del filtro.
-            if ( $has_source ) {
-                $layer_value_bounds = $build_index();
-                foreach ( $layer_value_bounds as $v => $b ) {
-                    if ( ! isset( $value_bounds[ $v ] ) ) {
-                        $value_bounds[ $v ] = $b;
-                    } else {
-                        $vb = $value_bounds[ $v ];
-                        $value_bounds[ $v ] = [
-                            min( $vb[0], $b[0] ), min( $vb[1], $b[1] ),
-                            max( $vb[2], $b[2] ), max( $vb[3], $b[3] ),
-                        ];
-                    }
-                }
-            }
-
-            // Se guarda el progreso capa a capa: si el proceso se interrumpiera a
-            // mitad (otro límite de tiempo, aunque mucho más generoso aquí), no
-            // se pierde lo ya analizado y se retoma donde quedó.
-            kml_map_save_layers( $post_id, $layers );
-            update_post_meta( $post_id, '_glocalsaino_map_fields_available', wp_json_encode( $fields, JSON_UNESCAPED_UNICODE ) );
-            update_post_meta( $post_id, '_glocalsaino_map_fields_by_layer', wp_json_encode( $fields_by_layer, JSON_UNESCAPED_UNICODE ) );
-            if ( ! get_post_meta( $post_id, '_glocalsaino_map_fields_visible', true ) ) {
-                update_post_meta( $post_id, '_glocalsaino_map_fields_visible', wp_json_encode( $fields, JSON_UNESCAPED_UNICODE ) );
-            }
-
-            $sorted_values = $filter_values;
-            sort( $sorted_values, SORT_NATURAL );
-            update_post_meta( $post_id, '_glocalsaino_map_filter_values', wp_json_encode( $sorted_values, JSON_UNESCAPED_UNICODE ) );
-            update_post_meta( $post_id, '_glocalsaino_map_filter_values_field', $filter_field );
-            update_post_meta( $post_id, '_glocalsaino_map_filter_value_bounds', wp_json_encode( $value_bounds, JSON_UNESCAPED_UNICODE ) );
         }
     }
 
-    // ---------------------------------------------------------------------------
-    // Helper: al borrar una capa, quita del listado de campos disponibles (y,
-    // si hace falta, del campo de filtro elegido) cualquier campo que solo
-    // aportara esa capa — si no, un campo se queda para siempre en "Campos
-    // del popup" como si aún viniera de alguna capa, aunque ya no exista
-    // ninguna que lo tenga. Identifica la capa por su nombre (ver
-    // _glocalsaino_map_fields_by_layer); si dos capas del mismo mapa
-    // comparten nombre, esto no las distingue entre sí — caso raro, no se
-    // contempla aquí.
-    // ---------------------------------------------------------------------------
-    function kml_map_prune_fields_after_layer_removed( $post_id, $removed_layer_name ) {
-        if ( ! $removed_layer_name ) return;
+    $reader->close();
+    libxml_use_internal_errors( $prev_use_errors );
 
-        $fields_by_layer = json_decode( get_post_meta( $post_id, '_glocalsaino_map_fields_by_layer', true ), true ) ?: [];
-        $changed         = false;
+    file_put_contents( trailingslashit( $out_dir ) . '.schema', (string) KML_MAP_TILE_SCHEMA_VERSION );
 
-        foreach ( $fields_by_layer as $field => $layer_names ) {
-            $key = array_search( $removed_layer_name, $layer_names, true );
-            if ( false === $key ) continue;
+    return $value_bounds;
+}
 
-            unset( $layer_names[ $key ] );
-            $changed = true;
-
-            if ( empty( $layer_names ) ) {
-                unset( $fields_by_layer[ $field ] );
-            } else {
-                $fields_by_layer[ $field ] = array_values( $layer_names );
-            }
-        }
-
-        if ( ! $changed ) return;
-
-        $fields_available = array_keys( $fields_by_layer );
-        update_post_meta( $post_id, '_glocalsaino_map_fields_by_layer', wp_json_encode( $fields_by_layer, JSON_UNESCAPED_UNICODE ) );
-        update_post_meta( $post_id, '_glocalsaino_map_fields_available', wp_json_encode( $fields_available, JSON_UNESCAPED_UNICODE ) );
-
-        $fields_visible = json_decode( get_post_meta( $post_id, '_glocalsaino_map_fields_visible', true ), true );
-        if ( is_array( $fields_visible ) ) {
-            $fields_visible = array_values( array_intersect( $fields_visible, $fields_available ) );
-            update_post_meta( $post_id, '_glocalsaino_map_fields_visible', wp_json_encode( $fields_visible, JSON_UNESCAPED_UNICODE ) );
-        }
-
-        // Si el campo de filtro elegido ya no lo aporta ninguna capa, se
-        // desactiva el filtro (en vez de dejarlo apuntando a un campo
-        // fantasma) hasta que se elija uno nuevo entre los que queden.
-        $filter_field = get_post_meta( $post_id, '_glocalsaino_map_filter_field', true );
-        if ( $filter_field && ! in_array( $filter_field, $fields_available, true ) ) {
-            update_post_meta( $post_id, '_glocalsaino_map_filter_field', '' );
-            update_post_meta( $post_id, '_glocalsaino_map_filter_values', wp_json_encode( [], JSON_UNESCAPED_UNICODE ) );
-            update_post_meta( $post_id, '_glocalsaino_map_filter_value_bounds', wp_json_encode( [], JSON_UNESCAPED_UNICODE ) );
-            update_post_meta( $post_id, '_glocalsaino_map_filter_values_field', '' );
+// ---------------------------------------------------------------------------
+// Helper: ¿alguno de los archivos subidos superó upload_max_filesize o
+// post_max_size (límite del propio PHP/hosting)? En ese caso PHP marca el
+// archivo con error UPLOAD_ERR_INI_SIZE/FORM_SIZE, kml_map_upload_files()
+// lo descarta como cualquier otro fallo, y sin esta comprobación el
+// usuario recibía el mismo aviso genérico de "extensión no válida" aunque
+// el archivo sí fuera .kml — confuso y no decía lo que realmente pasaba.
+// ---------------------------------------------------------------------------
+function kml_map_upload_exceeds_size_limit( $files_array ) {
+    foreach ( (array) ( $files_array['error'] ?? [] ) as $error_code ) {
+        if ( in_array( (int) $error_code, [ UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE ], true ) ) {
+            return true;
         }
     }
+    return false;
+}
 
-    // ---------------------------------------------------------------------------
-    // Helper: marca para reanálisis en segundo plano las capas que lo necesiten
-    // —les falta el análisis (mapas migrados), el campo de filtrado ha
-    // cambiado, o su índice espacial no existe o está en un formato antiguo
-    // (ver KML_MAP_TILE_SCHEMA_VERSION)— y programa el cron. No repite trabajo
-    // si ya está todo al día.
-    // ---------------------------------------------------------------------------
-    function kml_map_ensure_layers_queued( $post_id, $layers, $filter_field ) {
-        $needs_queue    = false;
-        $tiles_outdated = false;
+// ---------------------------------------------------------------------------
+// Helper: sube un array de archivos KML y crea la entrada de cada capa SIN
+// analizarla todavía (bounds/campos/valores de filtro). El análisis se hace
+// después en segundo plano (ver kml_map_run_analysis): así la subida responde
+// al instante sin importar cuántos objetos tenga el KML, y sin depender de
+// los límites de tiempo de ejecución del servidor.
+// ---------------------------------------------------------------------------
+function kml_map_upload_files( $files_array, $colors = [], $no_fill = [], $opacity = [], $icon_sizes = [] ) {
+    require_once ABSPATH . 'wp-admin/includes/file.php';
 
-        foreach ( $layers as $idx => $layer ) {
-            $layer_outdated = ! kml_map_tile_index_current( kml_map_tile_dir( $layer['url'] ) );
-            if ( $layer_outdated ) $tiles_outdated = true;
-            if ( empty( $layer['analyzed'] ) || $layer_outdated ) {
-                $layers[ $idx ]['analyzed'] = false;
-                $needs_queue = true;
-            }
-        }
+    $layers      = [];
+    $count       = count( $files_array['name'] );
+    $color_index = 0;
 
-        $filter_values_field = get_post_meta( $post_id, '_glocalsaino_map_filter_values_field', true );
+    for ( $i = 0; $i < $count; $i++ ) {
+        if ( $files_array['error'][ $i ] !== UPLOAD_ERR_OK ) continue;
 
-        // El campo de filtro cambió (o nunca se calculó), o el índice espacial
-        // está en un formato antiguo: en ambos casos los valores de filtro ya
-        // guardados no sirven (los del formato antiguo podrían venir con
-        // acentos/eñes corruptos de una versión previa del plugin) y hay que
-        // recalcularlos desde cero para toda la capa, no solo acumular encima.
-        if ( $filter_values_field !== $filter_field || $tiles_outdated ) {
-            foreach ( $layers as $idx => $layer ) {
-                $layers[ $idx ]['analyzed'] = false;
-            }
-            update_post_meta( $post_id, '_glocalsaino_map_filter_values', wp_json_encode( [], JSON_UNESCAPED_UNICODE ) );
-            update_post_meta( $post_id, '_glocalsaino_map_filter_values_field', $filter_field );
-            update_post_meta( $post_id, '_glocalsaino_map_filter_value_bounds', wp_json_encode( [], JSON_UNESCAPED_UNICODE ) );
-            $needs_queue = true;
-        }
+        // Nombre saneado una sola vez aquí; se usa tanto para comprobar
+        // la extensión como para el nombre de la capa (más abajo) y lo
+        // que se pasa a wp_handle_upload(), que ya vuelve a sanearlo por
+        // su cuenta al mover el archivo a su ubicación final.
+        $filename = sanitize_file_name( wp_unslash( $files_array['name'][ $i ] ) );
 
-        if ( $needs_queue ) {
-            kml_map_save_layers( $post_id, $layers );
-            kml_map_schedule_analysis( $post_id );
-        }
+        $ext = strtolower( pathinfo( $filename, PATHINFO_EXTENSION ) );
+        if ( $ext !== 'kml' ) continue;
 
-        return $layers;
+        $single = [
+            'name'     => $filename,
+            'type'     => sanitize_mime_type( $files_array['type'][ $i ] ),
+            'tmp_name' => $files_array['tmp_name'][ $i ],
+            'error'    => $files_array['error'][ $i ],
+            'size'     => $files_array['size'][ $i ],
+        ];
+
+        $upload = wp_handle_upload( $single, [ 'test_form' => false ] );
+        if ( isset( $upload['error'] ) ) continue;
+
+        $color = isset( $colors[ $color_index ] )
+            ? sanitize_hex_color( $colors[ $color_index ] )
+            : '';
+
+        // Nivel de relleno (0-100 en el formulario) a fracción 0-1; 0.6 por
+        // defecto si no llega nada, igual que el valor fijo que se usaba
+        // antes de poder personalizarlo.
+        $opacity_pct   = isset( $opacity[ $color_index ] ) ? (int) $opacity[ $color_index ] : 60;
+        $opacity_value = max( 0, min( 100, $opacity_pct ) ) / 100;
+
+        // Solo tiene efecto si los objetos de la capa resultan ser puntos
+        // (p.ej. una capa de un add-on con datos de una fuente externa);
+        // en polígonos/líneas no cambia nada visible, igual que pasa con
+        // "Solo borde" en un punto. El marcador de un punto siempre es un
+        // círculo del color de la capa; lo único configurable es su radio.
+        $icon_size = isset( $icon_sizes[ $color_index ] ) ? max( 4, min( 60, (int) $icon_sizes[ $color_index ] ) ) : 8;
+
+        $layers[] = [
+            'url'             => esc_url_raw( $upload['url'] ),
+            'name'            => pathinfo( $filename, PATHINFO_FILENAME ),
+            'color'           => $color,
+            'fill'            => empty( $no_fill[ $color_index ] ),
+            'opacity'         => $opacity_value,
+            'point_icon_size' => $icon_size,
+            'bounds'          => null,
+            'analyzed'        => false,
+        ];
+        $color_index++;
     }
 
-    // ---------------------------------------------------------------------------
-    // Endpoint REST: devuelve los objetos de una capa (opcionalmente filtrados
-    // por campo/valores), en páginas de KML_MAP_PAGE_SIZE objetos. El navegador
-    // pide la capa entera empezando por la página 0 en cuanto se abre el mapa, y
-    // sigue pidiendo páginas sucesivas mientras la respuesta diga 'has_more' (ver
-    // fetchLayerPage en el JS); así una capa de 63.000 objetos se sirve en varias
-    // peticiones ligeras en vez de una sola enorme que colgaría la página.
-    // ---------------------------------------------------------------------------
-    add_action( 'rest_api_init', function () {
-        register_rest_route( 'glocalsaino-map/v1', '/features', [
-            'methods'             => 'GET',
-            'callback'            => 'kml_map_rest_get_features',
-            'permission_callback' => '__return_true', // mismo dato que ya es público en el KML subido
-            'args'                => [
-                'url' => [ 'required' => true ],
-            ],
-        ] );
-    } );
+    return $layers;
+}
 
-    // Nº de objetos que se devuelven como máximo en cada página.
-    define( 'KML_MAP_PAGE_SIZE', 5000 );
+// Helper: convierte una URL del directorio de subidas a ruta absoluta en disco
+function kml_map_url_to_path( $url ) {
+    $upload_dir  = wp_upload_dir();
+    $base_path   = wp_parse_url( $upload_dir['baseurl'], PHP_URL_PATH );
+    $file_path   = wp_parse_url( $url, PHP_URL_PATH );
+    $relative    = substr( $file_path, strlen( $base_path ) );
+    return $upload_dir['basedir'] . $relative;
+}
 
-    function kml_map_rest_get_features( WP_REST_Request $req ) {
-        $url  = esc_url_raw( $req->get_param( 'url' ) );
-        $page = max( 0, intval( $req->get_param( 'page' ) ) );
+// ---------------------------------------------------------------------------
+// Procesamiento en segundo plano (WP-Cron): el análisis de cada KML (bounds,
+// campos, valores de filtro) se hace fuera de la petición que ve el
+// navegador. Un archivo de decenas de miles de objetos puede tardar más de
+// lo que el servidor (PHP, Nginx/Apache o un proxy delante) permite para una
+// sola petición HTTP; en segundo plano no hay ese límite.
+// ---------------------------------------------------------------------------
+add_action( 'kml_map_analyze_cron', 'kml_map_run_analysis' );
 
-        $filter_field  = sanitize_text_field( (string) $req->get_param( 'filter_field' ) );
-        $filter_values = array_filter( array_map( 'trim', explode( ',', (string) $req->get_param( 'filter_values' ) ) ) );
+function kml_map_schedule_analysis( $post_id ) {
+    if ( ! wp_next_scheduled( 'kml_map_analyze_cron', [ $post_id ] ) ) {
+        wp_schedule_single_event( time(), 'kml_map_analyze_cron', [ $post_id ] );
+    }
+    // Intenta arrancar el cron ya mismo en vez de esperar a la próxima visita al sitio.
+    if ( function_exists( 'spawn_cron' ) ) spawn_cron();
+}
 
-        $tile_dir       = kml_map_tile_dir( $url );
-        $features       = [];
-        $total_matching = 0; // cuántos objetos cumplen el filtro en total (de todas las páginas)
-        $page_size      = KML_MAP_PAGE_SIZE;
-        $skip           = $page * $page_size;
+function kml_map_run_analysis( $post_id ) {
+    // Necesario: analizar un KML de decenas de miles de objetos puede
+    // tardar más que el límite de ejecución por defecto. Esto corre en
+    // WP-Cron (nunca en una petición que vea el navegador), y ya está
+    // protegido por si el hosting lo tiene deshabilitado.
+    if ( function_exists( 'set_time_limit' ) ) {
+        // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged
+        @set_time_limit( 0 );
+    }
+    if ( function_exists( 'wp_raise_memory_limit' ) ) wp_raise_memory_limit( 'admin' );
 
-        if ( is_dir( $tile_dir ) ) {
-            // Todos los archivos de celda de la capa, en orden estable: el mismo
-            // orden en cada petición es lo que hace que las páginas sucesivas no
-            // se salten ni repitan objetos.
-            //
-            // Formato NDJSON (una línea = un objeto): cada archivo de celda es
-            // pequeño (los objetos de la capa están repartidos entre varios),
-            // así que leerlo entero con file_get_contents() y partirlo por
-            // líneas no vuelve a cargar toda la capa de golpe en memoria como
-            // pasaba antes de repartirla en celdas.
-            $files = glob( trailingslashit( $tile_dir ) . '*.ndjson' ) ?: [];
-            sort( $files );
+    $layers = kml_map_get_layers( $post_id );
+    if ( empty( $layers ) ) return;
 
-            foreach ( $files as $file ) {
-                $lines = explode( "\n", (string) file_get_contents( $file ) );
+    // Sin campo de filtro configurado (versión gratuita, o premium que aún
+    // no lo ha elegido en "Campos del popup"), no se filtra nada: no tiene
+    // sentido buscar valores de un campo por defecto que puede ni existir
+    // en el KML de quien lo use.
+    $filter_field    = get_post_meta( $post_id, '_glocalsaino_map_filter_field', true ) ?: '';
+    $fields          = json_decode( get_post_meta( $post_id, '_glocalsaino_map_fields_available', true ), true ) ?: [];
+    // Qué capa(s) tienen cada campo (por nombre de capa): distintas capas
+    // pueden traer un campo con el mismo nombre pero significados
+    // distintos, así que en el panel se muestra junto a qué capa(s)
+    // aparece cada uno, en vez de una lista plana sin esa referencia.
+    $fields_by_layer = json_decode( get_post_meta( $post_id, '_glocalsaino_map_fields_by_layer', true ), true ) ?: [];
+    $filter_values   = json_decode( get_post_meta( $post_id, '_glocalsaino_map_filter_values', true ), true ) ?: [];
+    $value_bounds    = json_decode( get_post_meta( $post_id, '_glocalsaino_map_filter_value_bounds', true ), true ) ?: [];
 
-                foreach ( $lines as $line ) {
-                    if ( $line === '' ) continue;
+    foreach ( $layers as $idx => $layer ) {
+        // Una capa que ya tenía 'analyzed' de antes de existir el índice
+        // espacial, o cuyo índice está en un formato antiguo (ver
+        // KML_MAP_TILE_SCHEMA_VERSION), no debe darse por completa: si no,
+        // nunca se reconstruye y el endpoint sirve datos incompletos.
+        $tile_dir = kml_map_tile_dir( $layer['url'] );
+        if ( ! empty( $layer['analyzed'] ) && kml_map_tile_index_current( $tile_dir ) ) continue;
 
-                    $f = json_decode( $line, true );
-                    if ( ! is_array( $f ) ) continue;
+        // Tipo de capa: 'kml' (subida de archivo, comportamiento de
+        // siempre) es el único que trae este plugin. Los add-ons (p.ej.
+        // fuentes de datos externas vía URL) pueden registrar tipos
+        // adicionales con el filtro 'glocalsaino_map_layer_types',
+        // devolviendo, por tipo, un array con las funciones 'analyze' y
+        // 'build_index' que sustituyen a kml_map_analyze_kml()/
+        // kml_map_build_feature_index() para ese tipo de capa. Así el
+        // resto de este bucle (agregación de campos, valores de filtro,
+        // guardado incremental) no necesita saber nada del origen real
+        // de los datos.
+        $layer_type = $layer['type'] ?? 'kml';
 
-                    if ( $filter_field && $filter_values ) {
-                        $v = $f['properties'][ $filter_field ] ?? null;
-                        if ( $v === null || ! in_array( (string) $v, $filter_values, true ) ) continue;
-                    }
+        if ( 'kml' === $layer_type ) {
+            $path        = kml_map_url_to_path( $layer['url'] );
+            $has_source  = file_exists( $path );
+            $analysis    = $has_source
+                ? kml_map_analyze_kml( $path, $filter_field )
+                : [ 'bounds' => null, 'fields' => [], 'filter_values' => [] ];
+            $build_index = static function () use ( $path, $tile_dir, $filter_field ) {
+                return kml_map_build_feature_index( $path, $tile_dir, $filter_field );
+            };
+        } else {
+            $layer_handlers = apply_filters( 'glocalsaino_map_layer_types', [] );
+            $handler        = $layer_handlers[ $layer_type ] ?? null;
 
-                    $total_matching++;
+            // Tipo desconocido (add-on desactivado, o mapa con una capa
+            // de un add-on que ya no está instalado): se deja tal cual,
+            // sin marcarla como analizada, en vez de romper el resto del
+            // mapa o borrar los datos que tuviera.
+            if ( ! $handler || empty( $handler['analyze'] ) || empty( $handler['build_index'] ) ) continue;
 
-                    // Los objetos de páginas anteriores a la pedida se cuentan
-                    // (para el total) pero no se incluyen; los de esta página
-                    // sí, hasta llenarla.
-                    if ( $total_matching <= $skip || count( $features ) >= $page_size ) continue;
+            $has_source  = true;
+            $analysis    = call_user_func( $handler['analyze'], $layer, $filter_field );
+            $build_index = static function () use ( $handler, $layer, $tile_dir, $filter_field ) {
+                return call_user_func( $handler['build_index'], $layer, $tile_dir, $filter_field );
+            };
+        }
 
-                    $features[] = [
-                        'type'       => 'Feature',
-                        'geometry'   => $f['geometry'],
-                        'properties' => $f['properties'],
+        $layers[ $idx ]['bounds']     = $analysis['bounds'];
+        $layers[ $idx ]['analyzed']   = true;
+        // Genérico: si el 'analyze' de este tipo de capa (KML no lo usa;
+        // los add-ons con una fuente de datos externa sí pueden) informa
+        // de por qué no encontró datos, se guarda para poder mostrarlo en
+        // el admin — si no, un fallo silencioso (URL caída, JSON sin el
+        // campo esperado, etc.) solo se veía en el log de depuración.
+        $layers[ $idx ]['last_error'] = $analysis['error'] ?? '';
+
+        $layer_name = $layer['name'] ?? '';
+        foreach ( $analysis['fields'] as $f ) {
+            if ( ! in_array( $f, $fields, true ) ) $fields[] = $f;
+
+            if ( ! isset( $fields_by_layer[ $f ] ) ) $fields_by_layer[ $f ] = [];
+            if ( $layer_name && ! in_array( $layer_name, $fields_by_layer[ $f ], true ) ) {
+                $fields_by_layer[ $f ][] = $layer_name;
+            }
+        }
+        foreach ( $analysis['filter_values'] as $v ) {
+            if ( ! in_array( $v, $filter_values, true ) ) $filter_values[] = $v;
+        }
+
+        // Índice de la capa: reparte sus objetos en varios archivos NDJSON
+        // pequeños (ver el endpoint REST más abajo, que los pagina) en vez de
+        // uno solo con todos los objetos de golpe. De paso calcula el
+        // rectángulo que engloba los objetos de cada valor del filtro.
+        if ( $has_source ) {
+            $layer_value_bounds = $build_index();
+            foreach ( $layer_value_bounds as $v => $b ) {
+                if ( ! isset( $value_bounds[ $v ] ) ) {
+                    $value_bounds[ $v ] = $b;
+                } else {
+                    $vb = $value_bounds[ $v ];
+                    $value_bounds[ $v ] = [
+                        min( $vb[0], $b[0] ), min( $vb[1], $b[1] ),
+                        max( $vb[2], $b[2] ), max( $vb[3], $b[3] ),
                     ];
                 }
-
-                // Libera el contenido de esta celda antes de pasar a la
-                // siguiente, en vez de esperar a que $lines se sobrescriba
-                // sola en la próxima vuelta: con una celda muy poblada, no
-                // tiene sentido mantener sus líneas en memoria mientras se
-                // procesa la siguiente.
-                unset( $lines );
             }
         }
 
-        // 'has_more' le dice al navegador que pida la siguiente página para
-        // completar la capa; solo cuando ya no hay más páginas se da por
-        // totalmente cargada (ver el JS).
-        $response = new WP_REST_Response( [
-            'type'     => 'FeatureCollection',
-            'features' => $features,
-            'has_more' => $total_matching > ( $skip + count( $features ) ),
-            'total'    => $total_matching,
-        ] );
-        // Una capa "en directo" (ver liveRefreshMinutes en el JS) manda
-        // 'live=1' en cada petición para avisar de que no se puede cachear
-        // esta respuesta: si no, un CDN, el propio navegador o una caché del
-        // hosting podían seguir sirviendo una posición antigua de un objeto
-        // en movimiento durante los 60s de caché normales, aunque el índice
-        // en el servidor ya se hubiera actualizado.
-        $is_live = (bool) $req->get_param( 'live' );
-        $response->header( 'Cache-Control', $is_live ? 'no-store' : 'public, max-age=60' );
-        return $response;
+        // Se guarda el progreso capa a capa: si el proceso se interrumpiera a
+        // mitad (otro límite de tiempo, aunque mucho más generoso aquí), no
+        // se pierde lo ya analizado y se retoma donde quedó.
+        kml_map_save_layers( $post_id, $layers );
+        update_post_meta( $post_id, '_glocalsaino_map_fields_available', wp_json_encode( $fields, JSON_UNESCAPED_UNICODE ) );
+        update_post_meta( $post_id, '_glocalsaino_map_fields_by_layer', wp_json_encode( $fields_by_layer, JSON_UNESCAPED_UNICODE ) );
+        if ( ! get_post_meta( $post_id, '_glocalsaino_map_fields_visible', true ) ) {
+            update_post_meta( $post_id, '_glocalsaino_map_fields_visible', wp_json_encode( $fields, JSON_UNESCAPED_UNICODE ) );
+        }
+
+        $sorted_values = $filter_values;
+        sort( $sorted_values, SORT_NATURAL );
+        update_post_meta( $post_id, '_glocalsaino_map_filter_values', wp_json_encode( $sorted_values, JSON_UNESCAPED_UNICODE ) );
+        update_post_meta( $post_id, '_glocalsaino_map_filter_values_field', $filter_field );
+        update_post_meta( $post_id, '_glocalsaino_map_filter_value_bounds', wp_json_encode( $value_bounds, JSON_UNESCAPED_UNICODE ) );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: al borrar una capa, quita del listado de campos disponibles (y,
+// si hace falta, del campo de filtro elegido) cualquier campo que solo
+// aportara esa capa — si no, un campo se queda para siempre en "Campos
+// del popup" como si aún viniera de alguna capa, aunque ya no exista
+// ninguna que lo tenga. Identifica la capa por su nombre (ver
+// _glocalsaino_map_fields_by_layer); si dos capas del mismo mapa
+// comparten nombre, esto no las distingue entre sí — caso raro, no se
+// contempla aquí.
+// ---------------------------------------------------------------------------
+function kml_map_prune_fields_after_layer_removed( $post_id, $removed_layer_name ) {
+    if ( ! $removed_layer_name ) return;
+
+    $fields_by_layer = json_decode( get_post_meta( $post_id, '_glocalsaino_map_fields_by_layer', true ), true ) ?: [];
+    $changed         = false;
+
+    foreach ( $fields_by_layer as $field => $layer_names ) {
+        $key = array_search( $removed_layer_name, $layer_names, true );
+        if ( false === $key ) continue;
+
+        unset( $layer_names[ $key ] );
+        $changed = true;
+
+        if ( empty( $layer_names ) ) {
+            unset( $fields_by_layer[ $field ] );
+        } else {
+            $fields_by_layer[ $field ] = array_values( $layer_names );
+        }
     }
 
-    // ---------------------------------------------------------------------------
-    // Acción: crear nuevo mapa (con uno o varios KML)
-    // ---------------------------------------------------------------------------
-    add_action( 'admin_post_kml_map_add', function () {
-        if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'No permission.', 'glocalsaino-layer-map-viewer' ) );
-        check_admin_referer( 'kml_map_add' );
+    if ( ! $changed ) return;
 
-        $title = sanitize_text_field( wp_unslash( $_POST['map_title'] ?? '' ) );
-        if ( empty( $title ) ) {
-            wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=notitle' ) ); exit;
-        }
-        // Subir archivos KML aquí es opcional: un mapa puede crearse vacío y
-        // recibir sus capas más adelante (p.ej. desde un add-on de fuentes de
-        // datos externas, que no pasa por este formulario). Si no se ha
-        // seleccionado ningún archivo, el mapa se crea sin capas en vez de
-        // devolver un error.
-        $has_files = ! empty( $_FILES['kml_files']['name'][0] );
+    $fields_available = array_keys( $fields_by_layer );
+    update_post_meta( $post_id, '_glocalsaino_map_fields_by_layer', wp_json_encode( $fields_by_layer, JSON_UNESCAPED_UNICODE ) );
+    update_post_meta( $post_id, '_glocalsaino_map_fields_available', wp_json_encode( $fields_available, JSON_UNESCAPED_UNICODE ) );
 
-        if ( $has_files ) {
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- solo se leen los códigos numéricos de error de subida (kml_map_upload_exceeds_size_limit()), no nombres de archivo ni otros datos de texto.
-            if ( kml_map_upload_exceeds_size_limit( wp_unslash( $_FILES['kml_files'] ) ) ) {
-                wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=toobig' ) ); exit;
-            }
-        }
+    $fields_visible = json_decode( get_post_meta( $post_id, '_glocalsaino_map_fields_visible', true ), true );
+    if ( is_array( $fields_visible ) ) {
+        $fields_visible = array_values( array_intersect( $fields_visible, $fields_available ) );
+        update_post_meta( $post_id, '_glocalsaino_map_fields_visible', wp_json_encode( $fields_visible, JSON_UNESCAPED_UNICODE ) );
+    }
 
-        $colors     = array_map( 'sanitize_text_field', wp_unslash( (array) ( $_POST['kml_colors'] ?? [] ) ) );
-        $no_fill    = array_map( 'sanitize_text_field', wp_unslash( (array) ( $_POST['kml_no_fill'] ?? [] ) ) );
-        $opacity    = array_map( 'absint', wp_unslash( (array) ( $_POST['kml_opacity'] ?? [] ) ) );
-        $icon_sizes = array_map( 'absint', wp_unslash( (array) ( $_POST['kml_icon_size'] ?? [] ) ) );
-
-        $layers = [];
-        if ( $has_files ) {
-            // Sacado a su propia variable (en vez de pasarlo directo como
-            // argumento) porque, al tener kml_map_upload_files() varios
-            // argumentos, el reformateador de Freemius parte la llamada en
-            // varias líneas y el phpcs:ignore de la línea de arriba deja de
-            // cubrir la línea real con $_FILES; en una asignación simple esto no
-            // puede pasar.
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- saneado dentro de kml_map_upload_files() (sanitize_file_name/sanitize_mime_type); wp_handle_upload() valida el propio archivo.
-            $kml_files_raw = wp_unslash( $_FILES['kml_files'] );
-            $layers        = kml_map_upload_files( $kml_files_raw, $colors, $no_fill, $opacity, $icon_sizes );
-            if ( empty( $layers ) ) {
-                wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=badext' ) ); exit;
-            }
-        }
-
-        $post_id = wp_insert_post( [
-            'post_title'  => $title,
-            'post_type'   => 'glocalsaino_map',
-            'post_status' => 'publish',
-        ] );
-
-        kml_map_save_layers( $post_id, $layers );
-        update_post_meta( $post_id, '_glocalsaino_map_fields_available', wp_json_encode( [], JSON_UNESCAPED_UNICODE ) );
+    // Si el campo de filtro elegido ya no lo aporta ninguna capa, se
+    // desactiva el filtro (en vez de dejarlo apuntando a un campo
+    // fantasma) hasta que se elija uno nuevo entre los que queden.
+    $filter_field = get_post_meta( $post_id, '_glocalsaino_map_filter_field', true );
+    if ( $filter_field && ! in_array( $filter_field, $fields_available, true ) ) {
+        update_post_meta( $post_id, '_glocalsaino_map_filter_field', '' );
         update_post_meta( $post_id, '_glocalsaino_map_filter_values', wp_json_encode( [], JSON_UNESCAPED_UNICODE ) );
+        update_post_meta( $post_id, '_glocalsaino_map_filter_value_bounds', wp_json_encode( [], JSON_UNESCAPED_UNICODE ) );
         update_post_meta( $post_id, '_glocalsaino_map_filter_values_field', '' );
+    }
+}
 
-        // El análisis (bounds, campos, valores de filtro) se hace en segundo
-        // plano; hasta que termine, el mapa se ve en el front-end con una vista
-        // de partida genérica y el filtro se completa según se cargan capas.
-        kml_map_schedule_analysis( $post_id );
+// ---------------------------------------------------------------------------
+// Helper: al renombrar una capa, actualiza su nombre en
+// _glocalsaino_map_fields_by_layer (qué capa(s) aportan cada campo) para
+// que "Campos del popup" siga mostrando el nombre actual en vez del
+// antiguo. Mismo criterio de identificar la capa por nombre que usa
+// kml_map_prune_fields_after_layer_removed() — dos capas con el mismo
+// nombre no se distinguen entre sí, caso raro no contemplado aquí.
+// ---------------------------------------------------------------------------
+function kml_map_rename_layer_in_fields( $post_id, $old_name, $new_name ) {
+    if ( ! $old_name || $old_name === $new_name ) return;
 
-        wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&added=1' ) ); exit;
-    } );
+    $fields_by_layer = json_decode( get_post_meta( $post_id, '_glocalsaino_map_fields_by_layer', true ), true ) ?: [];
+    $changed         = false;
 
-    // ---------------------------------------------------------------------------
-    // Acción: añadir más capas KML a un mapa existente
-    // ---------------------------------------------------------------------------
-    add_action( 'admin_post_kml_map_add_layers', function () {
-        if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'No permission.', 'glocalsaino-layer-map-viewer' ) );
+    foreach ( $fields_by_layer as $field => $layer_names ) {
+        $key = array_search( $old_name, $layer_names, true );
+        if ( false === $key ) continue;
 
-        $map_id = intval( $_POST['map_id'] ?? 0 );
-        check_admin_referer( 'kml_map_add_layers_' . $map_id );
+        $fields_by_layer[ $field ][ $key ] = $new_name;
+        $changed = true;
+    }
 
-        if ( empty( $_FILES['kml_files']['name'][0] ) ) {
-            wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=nofile' ) ); exit;
+    if ( $changed ) {
+        update_post_meta( $post_id, '_glocalsaino_map_fields_by_layer', wp_json_encode( $fields_by_layer, JSON_UNESCAPED_UNICODE ) );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: marca para reanálisis en segundo plano las capas que lo necesiten
+// —les falta el análisis (mapas migrados), el campo de filtrado ha
+// cambiado, o su índice espacial no existe o está en un formato antiguo
+// (ver KML_MAP_TILE_SCHEMA_VERSION)— y programa el cron. No repite trabajo
+// si ya está todo al día.
+// ---------------------------------------------------------------------------
+function kml_map_ensure_layers_queued( $post_id, $layers, $filter_field ) {
+    $needs_queue    = false;
+    $tiles_outdated = false;
+
+    foreach ( $layers as $idx => $layer ) {
+        $layer_outdated = ! kml_map_tile_index_current( kml_map_tile_dir( $layer['url'] ) );
+        if ( $layer_outdated ) $tiles_outdated = true;
+        if ( empty( $layer['analyzed'] ) || $layer_outdated ) {
+            $layers[ $idx ]['analyzed'] = false;
+            $needs_queue = true;
         }
+    }
+
+    $filter_values_field = get_post_meta( $post_id, '_glocalsaino_map_filter_values_field', true );
+
+    // El campo de filtro cambió (o nunca se calculó), o el índice espacial
+    // está en un formato antiguo: en ambos casos los valores de filtro ya
+    // guardados no sirven (los del formato antiguo podrían venir con
+    // acentos/eñes corruptos de una versión previa del plugin) y hay que
+    // recalcularlos desde cero para toda la capa, no solo acumular encima.
+    if ( $filter_values_field !== $filter_field || $tiles_outdated ) {
+        foreach ( $layers as $idx => $layer ) {
+            $layers[ $idx ]['analyzed'] = false;
+        }
+        update_post_meta( $post_id, '_glocalsaino_map_filter_values', wp_json_encode( [], JSON_UNESCAPED_UNICODE ) );
+        update_post_meta( $post_id, '_glocalsaino_map_filter_values_field', $filter_field );
+        update_post_meta( $post_id, '_glocalsaino_map_filter_value_bounds', wp_json_encode( [], JSON_UNESCAPED_UNICODE ) );
+        $needs_queue = true;
+    }
+
+    if ( $needs_queue ) {
+        kml_map_save_layers( $post_id, $layers );
+        kml_map_schedule_analysis( $post_id );
+    }
+
+    return $layers;
+}
+
+// ---------------------------------------------------------------------------
+// Endpoint REST: devuelve los objetos de una capa (opcionalmente filtrados
+// por campo/valores), en páginas de KML_MAP_PAGE_SIZE objetos. El navegador
+// pide la capa entera empezando por la página 0 en cuanto se abre el mapa, y
+// sigue pidiendo páginas sucesivas mientras la respuesta diga 'has_more' (ver
+// fetchLayerPage en el JS); así una capa de 63.000 objetos se sirve en varias
+// peticiones ligeras en vez de una sola enorme que colgaría la página.
+// ---------------------------------------------------------------------------
+add_action( 'rest_api_init', function () {
+    register_rest_route( 'glocalsaino-map/v1', '/features', [
+        'methods'             => 'GET',
+        'callback'            => 'kml_map_rest_get_features',
+        'permission_callback' => '__return_true', // mismo dato que ya es público en el KML subido
+        'args'                => [
+            'url' => [ 'required' => true ],
+        ],
+    ] );
+} );
+
+// Nº de objetos que se devuelven como máximo en cada página.
+define( 'KML_MAP_PAGE_SIZE', 5000 );
+
+function kml_map_rest_get_features( WP_REST_Request $req ) {
+    $url  = esc_url_raw( $req->get_param( 'url' ) );
+    $page = max( 0, intval( $req->get_param( 'page' ) ) );
+
+    $filter_field  = sanitize_text_field( (string) $req->get_param( 'filter_field' ) );
+    $filter_values = array_filter( array_map( 'trim', explode( ',', (string) $req->get_param( 'filter_values' ) ) ) );
+
+    $tile_dir       = kml_map_tile_dir( $url );
+    $features       = [];
+    $total_matching = 0; // cuántos objetos cumplen el filtro en total (de todas las páginas)
+    $page_size      = KML_MAP_PAGE_SIZE;
+    $skip           = $page * $page_size;
+
+    if ( is_dir( $tile_dir ) ) {
+        // Todos los archivos de celda de la capa, en orden estable: el mismo
+        // orden en cada petición es lo que hace que las páginas sucesivas no
+        // se salten ni repitan objetos.
+        //
+        // Formato NDJSON (una línea = un objeto): cada archivo de celda es
+        // pequeño (los objetos de la capa están repartidos entre varios),
+        // así que leerlo entero con file_get_contents() y partirlo por
+        // líneas no vuelve a cargar toda la capa de golpe en memoria como
+        // pasaba antes de repartirla en celdas.
+        $files = glob( trailingslashit( $tile_dir ) . '*.ndjson' ) ?: [];
+        sort( $files );
+
+        foreach ( $files as $file ) {
+            $lines = explode( "\n", (string) file_get_contents( $file ) );
+
+            foreach ( $lines as $line ) {
+                if ( $line === '' ) continue;
+
+                $f = json_decode( $line, true );
+                if ( ! is_array( $f ) ) continue;
+
+                if ( $filter_field && $filter_values ) {
+                    $v = $f['properties'][ $filter_field ] ?? null;
+                    if ( $v === null || ! in_array( (string) $v, $filter_values, true ) ) continue;
+                }
+
+                $total_matching++;
+
+                // Los objetos de páginas anteriores a la pedida se cuentan
+                // (para el total) pero no se incluyen; los de esta página
+                // sí, hasta llenarla.
+                if ( $total_matching <= $skip || count( $features ) >= $page_size ) continue;
+
+                $features[] = [
+                    'type'       => 'Feature',
+                    'geometry'   => $f['geometry'],
+                    'properties' => $f['properties'],
+                ];
+            }
+
+            // Libera el contenido de esta celda antes de pasar a la
+            // siguiente, en vez de esperar a que $lines se sobrescriba
+            // sola en la próxima vuelta: con una celda muy poblada, no
+            // tiene sentido mantener sus líneas en memoria mientras se
+            // procesa la siguiente.
+            unset( $lines );
+        }
+    }
+
+    // 'has_more' le dice al navegador que pida la siguiente página para
+    // completar la capa; solo cuando ya no hay más páginas se da por
+    // totalmente cargada (ver el JS).
+    $response = new WP_REST_Response( [
+        'type'     => 'FeatureCollection',
+        'features' => $features,
+        'has_more' => $total_matching > ( $skip + count( $features ) ),
+        'total'    => $total_matching,
+    ] );
+    // Una capa "en directo" (ver liveRefreshMinutes en el JS) manda
+    // 'live=1' en cada petición para avisar de que no se puede cachear
+    // esta respuesta: si no, un CDN, el propio navegador o una caché del
+    // hosting podían seguir sirviendo una posición antigua de un objeto
+    // en movimiento durante los 60s de caché normales, aunque el índice
+    // en el servidor ya se hubiera actualizado.
+    $is_live = (bool) $req->get_param( 'live' );
+    $response->header( 'Cache-Control', $is_live ? 'no-store' : 'public, max-age=60' );
+    return $response;
+}
+
+// ---------------------------------------------------------------------------
+// Acción: crear nuevo mapa (con uno o varios KML)
+// ---------------------------------------------------------------------------
+add_action( 'admin_post_kml_map_add', function () {
+    if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'No permission.', 'glocalsaino-layer-map-viewer' ) );
+    check_admin_referer( 'kml_map_add' );
+
+    $title = sanitize_text_field( wp_unslash( $_POST['map_title'] ?? '' ) );
+    if ( empty( $title ) ) {
+        wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=notitle' ) ); exit;
+    }
+    // Subir archivos KML aquí es opcional: un mapa puede crearse vacío y
+    // recibir sus capas más adelante (p.ej. desde un add-on de fuentes de
+    // datos externas, que no pasa por este formulario). Si no se ha
+    // seleccionado ningún archivo, el mapa se crea sin capas en vez de
+    // devolver un error.
+    $has_files = ! empty( $_FILES['kml_files']['name'][0] );
+
+    if ( $has_files ) {
         // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- solo se leen los códigos numéricos de error de subida (kml_map_upload_exceeds_size_limit()), no nombres de archivo ni otros datos de texto.
         if ( kml_map_upload_exceeds_size_limit( wp_unslash( $_FILES['kml_files'] ) ) ) {
             wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=toobig' ) ); exit;
         }
+    }
 
-        $colors     = array_map( 'sanitize_text_field', wp_unslash( (array) ( $_POST['kml_colors'] ?? [] ) ) );
-        $no_fill    = array_map( 'sanitize_text_field', wp_unslash( (array) ( $_POST['kml_no_fill'] ?? [] ) ) );
-        $opacity    = array_map( 'absint', wp_unslash( (array) ( $_POST['kml_opacity'] ?? [] ) ) );
-        $icon_sizes = array_map( 'absint', wp_unslash( (array) ( $_POST['kml_icon_size'] ?? [] ) ) );
-        // Ver el comentario equivalente en admin_post_kml_map_add sobre por
-        // qué esto va en su propia variable.
+    $colors     = array_map( 'sanitize_text_field', wp_unslash( (array) ( $_POST['kml_colors'] ?? [] ) ) );
+    $no_fill    = array_map( 'sanitize_text_field', wp_unslash( (array) ( $_POST['kml_no_fill'] ?? [] ) ) );
+    $opacity    = array_map( 'absint', wp_unslash( (array) ( $_POST['kml_opacity'] ?? [] ) ) );
+    $icon_sizes = array_map( 'absint', wp_unslash( (array) ( $_POST['kml_icon_size'] ?? [] ) ) );
+
+    $layers = [];
+    if ( $has_files ) {
         // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- saneado dentro de kml_map_upload_files() (sanitize_file_name/sanitize_mime_type); wp_handle_upload() valida el propio archivo.
         $kml_files_raw = wp_unslash( $_FILES['kml_files'] );
-        $new_layers = kml_map_upload_files( $kml_files_raw, $colors, $no_fill, $opacity, $icon_sizes );
-        if ( empty( $new_layers ) ) {
+        $layers        = kml_map_upload_files( $kml_files_raw, $colors, $no_fill, $opacity, $icon_sizes );
+        if ( empty( $layers ) ) {
             wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=badext' ) ); exit;
         }
+    }
 
-        $existing = kml_map_get_layers( $map_id );
-        if ( null === $existing ) {
-            wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=corrupt' ) ); exit;
-        }
-        $merged = array_merge( $existing, $new_layers );
-        kml_map_save_layers( $map_id, $merged );
+    $post_id = wp_insert_post( [
+        'post_title'  => $title,
+        'post_type'   => 'glocalsaino_map',
+        'post_status' => 'publish',
+    ] );
 
-        // Las capas nuevas se suben sin analizar (bounds/campos/filtro); el
-        // análisis se hace en segundo plano.
-        kml_map_schedule_analysis( $map_id );
+    kml_map_save_layers( $post_id, $layers );
+    update_post_meta( $post_id, '_glocalsaino_map_fields_available', wp_json_encode( [], JSON_UNESCAPED_UNICODE ) );
+    update_post_meta( $post_id, '_glocalsaino_map_filter_values', wp_json_encode( [], JSON_UNESCAPED_UNICODE ) );
+    update_post_meta( $post_id, '_glocalsaino_map_filter_values_field', '' );
 
-        wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&added_layer=1' ) ); exit;
-    } );
+    // El análisis (bounds, campos, valores de filtro) se hace en segundo
+    // plano; hasta que termine, el mapa se ve en el front-end con una vista
+    // de partida genérica y el filtro se completa según se cargan capas.
+    kml_map_schedule_analysis( $post_id );
 
-    // ---------------------------------------------------------------------------
-    // Acción: guardar campos visibles en el popup
-    // ---------------------------------------------------------------------------
-    add_action( 'admin_post_kml_map_save_fields', function () {
-        if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'No permission.', 'glocalsaino-layer-map-viewer' ) );
+    wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&added=1' ) ); exit;
+} );
 
-        $map_id = intval( $_POST['map_id'] ?? 0 );
-        check_admin_referer( 'kml_map_save_fields_' . $map_id );
+// ---------------------------------------------------------------------------
+// Acción: añadir más capas KML a un mapa existente
+// ---------------------------------------------------------------------------
+add_action( 'admin_post_kml_map_add_layers', function () {
+    if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'No permission.', 'glocalsaino-layer-map-viewer' ) );
 
-        $visible      = array_map( 'sanitize_text_field', wp_unslash( (array) ( $_POST['kml_visible_fields'] ?? [] ) ) );
-        $filter_field = sanitize_text_field( wp_unslash( $_POST['kml_filter_field'] ?? '' ) );
+    $map_id = intval( $_POST['map_id'] ?? 0 );
+    check_admin_referer( 'kml_map_add_layers_' . $map_id );
 
-        update_post_meta( $map_id, '_glocalsaino_map_fields_visible', wp_json_encode( $visible, JSON_UNESCAPED_UNICODE ) );
+    if ( empty( $_FILES['kml_files']['name'][0] ) ) {
+        wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=nofile' ) ); exit;
+    }
+    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- solo se leen los códigos numéricos de error de subida (kml_map_upload_exceeds_size_limit()), no nombres de archivo ni otros datos de texto.
+    if ( kml_map_upload_exceeds_size_limit( wp_unslash( $_FILES['kml_files'] ) ) ) {
+        wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=toobig' ) ); exit;
+    }
 
-        // Se guarda siempre, incluso vacío: elegir "— Sin filtro —" (valor
-        // vacío) es una opción válida para quitar el filtro de un mapa que
-        // antes sí lo tenía, no solo para cambiarlo a otro campo. Antes esto
-        // se ignoraba silenciosamente si $filter_field estaba vacío, así que
-        // no había forma de desactivar el filtro una vez elegido un campo.
-        update_post_meta( $map_id, '_glocalsaino_map_filter_field', $filter_field );
+    $colors     = array_map( 'sanitize_text_field', wp_unslash( (array) ( $_POST['kml_colors'] ?? [] ) ) );
+    $no_fill    = array_map( 'sanitize_text_field', wp_unslash( (array) ( $_POST['kml_no_fill'] ?? [] ) ) );
+    $opacity    = array_map( 'absint', wp_unslash( (array) ( $_POST['kml_opacity'] ?? [] ) ) );
+    $icon_sizes = array_map( 'absint', wp_unslash( (array) ( $_POST['kml_icon_size'] ?? [] ) ) );
+    // Ver el comentario equivalente en admin_post_kml_map_add sobre por
+    // qué esto va en su propia variable.
+    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- saneado dentro de kml_map_upload_files() (sanitize_file_name/sanitize_mime_type); wp_handle_upload() valida el propio archivo.
+    $kml_files_raw = wp_unslash( $_FILES['kml_files'] );
+    $new_layers = kml_map_upload_files( $kml_files_raw, $colors, $no_fill, $opacity, $icon_sizes );
+    if ( empty( $new_layers ) ) {
+        wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=badext' ) ); exit;
+    }
 
-        if ( $filter_field ) {
-            // El campo de filtrado ha cambiado: los valores cacheados eran de
-            // otro campo. Se marca para reanalizar en segundo plano. Si las
-            // capas no se pueden leer (dato corrupto), no se llama a
-            // kml_map_ensure_layers_queued(): esa función SÍ guarda de
-            // vuelta, y hacerlo con un array vacío borraría las capas
-            // existentes en vez de dejarlas tal cual hasta poder investigar.
-            $layers = kml_map_get_layers( $map_id );
-            if ( null !== $layers ) {
-                kml_map_ensure_layers_queued( $map_id, $layers, $filter_field );
-            }
-        }
+    $existing = kml_map_get_layers( $map_id );
+    if ( null === $existing ) {
+        wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=corrupt' ) ); exit;
+    }
+    $merged = array_merge( $existing, $new_layers );
+    kml_map_save_layers( $map_id, $merged );
 
-        wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&saved_fields=1' ) ); exit;
-    } );
+    // Las capas nuevas se suben sin analizar (bounds/campos/filtro); el
+    // análisis se hace en segundo plano.
+    kml_map_schedule_analysis( $map_id );
 
-    // ---------------------------------------------------------------------------
-    // Acción: forzar el análisis ahora mismo (por si WP-Cron no se dispara solo)
-    // ---------------------------------------------------------------------------
-    add_action( 'admin_post_kml_map_analyze_now', function () {
-        if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'No permission.', 'glocalsaino-layer-map-viewer' ) );
+    wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&added_layer=1' ) ); exit;
+} );
 
-        $map_id = intval( $_GET['map_id'] ?? 0 );
-        check_admin_referer( 'kml_map_analyze_now_' . $map_id );
+// ---------------------------------------------------------------------------
+// Acción: guardar campos visibles en el popup
+// ---------------------------------------------------------------------------
+add_action( 'admin_post_kml_map_save_fields', function () {
+    if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'No permission.', 'glocalsaino-layer-map-viewer' ) );
 
-        // Nunca se analiza aquí mismo, de forma síncrona: con un KML de
-        // muchos miles de objetos, esta misma petición HTTP podía superar el
-        // límite de tiempo/memoria del propio servidor web (no solo el de
-        // PHP, que sí se puede levantar) y devolver un error 500 al pulsar
-        // este botón, aunque el mismo análisis en segundo plano (WP-Cron)
-        // completara sin problema. En vez de eso, se fuerza el reanálisis
-        // marcando las capas como no analizadas y se dispara en segundo
-        // plano, igual que tras subir un mapa nuevo.
+    $map_id = intval( $_POST['map_id'] ?? 0 );
+    check_admin_referer( 'kml_map_save_fields_' . $map_id );
+
+    $visible      = array_map( 'sanitize_text_field', wp_unslash( (array) ( $_POST['kml_visible_fields'] ?? [] ) ) );
+    $filter_field = sanitize_text_field( wp_unslash( $_POST['kml_filter_field'] ?? '' ) );
+
+    update_post_meta( $map_id, '_glocalsaino_map_fields_visible', wp_json_encode( $visible, JSON_UNESCAPED_UNICODE ) );
+
+    // Se guarda siempre, incluso vacío: elegir "— Sin filtro —" (valor
+    // vacío) es una opción válida para quitar el filtro de un mapa que
+    // antes sí lo tenía, no solo para cambiarlo a otro campo. Antes esto
+    // se ignoraba silenciosamente si $filter_field estaba vacío, así que
+    // no había forma de desactivar el filtro una vez elegido un campo.
+    update_post_meta( $map_id, '_glocalsaino_map_filter_field', $filter_field );
+
+    if ( $filter_field ) {
+        // El campo de filtrado ha cambiado: los valores cacheados eran de
+        // otro campo. Se marca para reanalizar en segundo plano. Si las
+        // capas no se pueden leer (dato corrupto), no se llama a
+        // kml_map_ensure_layers_queued(): esa función SÍ guarda de
+        // vuelta, y hacerlo con un array vacío borraría las capas
+        // existentes en vez de dejarlas tal cual hasta poder investigar.
         $layers = kml_map_get_layers( $map_id );
-        if ( null === $layers ) {
-            wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=corrupt' ) ); exit;
+        if ( null !== $layers ) {
+            kml_map_ensure_layers_queued( $map_id, $layers, $filter_field );
         }
-        foreach ( $layers as $idx => $layer ) {
-            $layers[ $idx ]['analyzed'] = false;
+    }
+
+    wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&saved_fields=1' ) ); exit;
+} );
+
+// ---------------------------------------------------------------------------
+// Acción: forzar el análisis ahora mismo (por si WP-Cron no se dispara solo)
+// ---------------------------------------------------------------------------
+add_action( 'admin_post_kml_map_analyze_now', function () {
+    if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'No permission.', 'glocalsaino-layer-map-viewer' ) );
+
+    $map_id = intval( $_GET['map_id'] ?? 0 );
+    check_admin_referer( 'kml_map_analyze_now_' . $map_id );
+
+    // Nunca se analiza aquí mismo, de forma síncrona: con un KML de
+    // muchos miles de objetos, esta misma petición HTTP podía superar el
+    // límite de tiempo/memoria del propio servidor web (no solo el de
+    // PHP, que sí se puede levantar) y devolver un error 500 al pulsar
+    // este botón, aunque el mismo análisis en segundo plano (WP-Cron)
+    // completara sin problema. En vez de eso, se fuerza el reanálisis
+    // marcando las capas como no analizadas y se dispara en segundo
+    // plano, igual que tras subir un mapa nuevo.
+    $layers = kml_map_get_layers( $map_id );
+    if ( null === $layers ) {
+        wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=corrupt' ) ); exit;
+    }
+    foreach ( $layers as $idx => $layer ) {
+        $layers[ $idx ]['analyzed'] = false;
+    }
+    kml_map_save_layers( $map_id, $layers );
+
+    kml_map_schedule_analysis( $map_id );
+
+    wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&analyzed=1' ) ); exit;
+} );
+
+// ---------------------------------------------------------------------------
+// Acción: editar el nombre, color y relleno de una capa ya subida.
+// ---------------------------------------------------------------------------
+add_action( 'admin_post_kml_map_update_layer', function () {
+    if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'No permission.', 'glocalsaino-layer-map-viewer' ) );
+
+    $map_id = intval( $_POST['map_id'] ?? 0 );
+    $idx    = intval( $_POST['layer_idx'] ?? -1 );
+    check_admin_referer( 'kml_map_update_layer_' . $map_id . '_' . $idx );
+
+    $layers = kml_map_get_layers( $map_id );
+    if ( null === $layers ) {
+        wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&error=corrupt' ) ); exit;
+    }
+
+    if ( isset( $layers[ $idx ] ) ) {
+        // Vacío = no se cambia, en vez de dejar la capa sin nombre/color:
+        // ambos campos son "required"/tienen un valor por defecto en el
+        // formulario, pero por si acaso llegara vacío de todos modos.
+        $name = sanitize_text_field( wp_unslash( $_POST['layer_name'] ?? '' ) );
+        if ( $name ) {
+            $old_name = $layers[ $idx ]['name'] ?? '';
+            $layers[ $idx ]['name'] = $name;
+            kml_map_rename_layer_in_fields( $map_id, $old_name, $name );
+        }
+
+        $color = sanitize_hex_color( wp_unslash( $_POST['color'] ?? '' ) );
+        if ( $color ) $layers[ $idx ]['color'] = $color;
+
+        $layers[ $idx ]['fill'] = empty( $_POST['no_fill'] );
+        if ( isset( $_POST['opacity'] ) ) {
+            $layers[ $idx ]['opacity'] = max( 0, min( 100, absint( $_POST['opacity'] ) ) ) / 100;
         }
         kml_map_save_layers( $map_id, $layers );
+    }
 
-        kml_map_schedule_analysis( $map_id );
+    wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&saved_layer=1' ) ); exit;
+} );
 
-        wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&analyzed=1' ) ); exit;
-    } );
+// ---------------------------------------------------------------------------
+// Acción: cambiar el aspecto (colores) de la caja de filtro y el botón
+// "Limpiar filtro" de un mapa.
+// ---------------------------------------------------------------------------
+add_action( 'admin_post_kml_map_set_bar_style', function () {
+    if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'No permission.', 'glocalsaino-layer-map-viewer' ) );
 
-    // ---------------------------------------------------------------------------
-    // Acción: cambiar si una capa existente se pinta rellena o solo el borde
-    // ---------------------------------------------------------------------------
-    add_action( 'admin_post_kml_map_set_fill', function () {
-        if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'No permission.', 'glocalsaino-layer-map-viewer' ) );
+    $map_id = intval( $_POST['map_id'] ?? 0 );
+    check_admin_referer( 'kml_map_set_bar_style_' . $map_id );
 
-        $map_id = intval( $_POST['map_id'] ?? 0 );
-        $idx    = intval( $_POST['layer_idx'] ?? -1 );
-        check_admin_referer( 'kml_map_set_fill_' . $map_id . '_' . $idx );
-
-        $layers = json_decode( get_post_meta( $map_id, '_glocalsaino_map_layers', true ), true ) ?: [];
-
-        if ( isset( $layers[ $idx ] ) ) {
-            $layers[ $idx ]['fill'] = empty( $_POST['no_fill'] );
-            if ( isset( $_POST['opacity'] ) ) {
-                $layers[ $idx ]['opacity'] = max( 0, min( 100, absint( $_POST['opacity'] ) ) ) / 100;
-            }
-            kml_map_save_layers( $map_id, $layers );
+    $bar_style = [];
+    if ( empty( $_POST['reset'] ) ) {
+        foreach ( [ 'bar_bg', 'bar_text', 'btn_bg', 'btn_text' ] as $key ) {
+            $value = sanitize_hex_color( wp_unslash( $_POST[ $key ] ?? '' ) );
+            if ( $value ) $bar_style[ $key ] = $value;
         }
+    }
+    // 'reset' marcado: se guarda vacío y todo vuelve a los colores por
+    // defecto de assets/css/map.css.
 
-        wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&saved_fill=1' ) ); exit;
-    } );
+    update_post_meta( $map_id, '_glocalsaino_map_bar_style', wp_json_encode( $bar_style, JSON_UNESCAPED_UNICODE ) );
 
-    // ---------------------------------------------------------------------------
-    // Acción: cambiar el aspecto (colores) de la caja de filtro y el botón
-    // "Limpiar filtro" de un mapa.
-    // ---------------------------------------------------------------------------
-    add_action( 'admin_post_kml_map_set_bar_style', function () {
-        if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'No permission.', 'glocalsaino-layer-map-viewer' ) );
+    wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&saved_bar_style=1' ) ); exit;
+} );
 
-        $map_id = intval( $_POST['map_id'] ?? 0 );
-        check_admin_referer( 'kml_map_set_bar_style_' . $map_id );
+// ---------------------------------------------------------------------------
+// Acción: eliminar una capa individual de un mapa
+// ---------------------------------------------------------------------------
+add_action( 'admin_post_kml_map_del_layer', function () {
+    if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'No permission.', 'glocalsaino-layer-map-viewer' ) );
 
-        $bar_style = [];
-        if ( empty( $_POST['reset'] ) ) {
-            foreach ( [ 'bar_bg', 'bar_text', 'btn_bg', 'btn_text' ] as $key ) {
-                $value = sanitize_hex_color( wp_unslash( $_POST[ $key ] ?? '' ) );
-                if ( $value ) $bar_style[ $key ] = $value;
-            }
-        }
-        // 'reset' marcado: se guarda vacío y todo vuelve a los colores por
-        // defecto de assets/css/map.css.
+    $map_id = intval( $_GET['map_id'] ?? 0 );
+    $idx    = intval( $_GET['layer_idx'] ?? -1 );
+    check_admin_referer( 'kml_map_del_layer_' . $map_id . '_' . $idx );
 
-        update_post_meta( $map_id, '_glocalsaino_map_bar_style', wp_json_encode( $bar_style, JSON_UNESCAPED_UNICODE ) );
+    $layers = json_decode( get_post_meta( $map_id, '_glocalsaino_map_layers', true ), true ) ?: [];
 
-        wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&saved_bar_style=1' ) ); exit;
-    } );
-
-    // ---------------------------------------------------------------------------
-    // Acción: eliminar una capa individual de un mapa
-    // ---------------------------------------------------------------------------
-    add_action( 'admin_post_kml_map_del_layer', function () {
-        if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'No permission.', 'glocalsaino-layer-map-viewer' ) );
-
-        $map_id = intval( $_GET['map_id'] ?? 0 );
-        $idx    = intval( $_GET['layer_idx'] ?? -1 );
-        check_admin_referer( 'kml_map_del_layer_' . $map_id . '_' . $idx );
-
-        $layers = json_decode( get_post_meta( $map_id, '_glocalsaino_map_layers', true ), true ) ?: [];
-
-        if ( isset( $layers[ $idx ] ) ) {
-            // Borrar archivo físico y su índice espacial en caché
-            $upload_dir = wp_upload_dir();
-            $path = str_replace( $upload_dir['baseurl'], $upload_dir['basedir'], $layers[ $idx ]['url'] );
-            if ( file_exists( $path ) ) wp_delete_file( $path );
-            kml_map_delete_dir_recursive( kml_map_tile_dir( $layers[ $idx ]['url'] ) );
-
-            $removed_layer_name = $layers[ $idx ]['name'] ?? '';
-
-            array_splice( $layers, $idx, 1 );
-            kml_map_save_layers( $map_id, array_values( $layers ) );
-
-            kml_map_prune_fields_after_layer_removed( $map_id, $removed_layer_name );
-        }
-
-        wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&deleted_layer=1' ) ); exit;
-    } );
-
-    // ---------------------------------------------------------------------------
-    // Acción: eliminar mapa completo
-    // ---------------------------------------------------------------------------
-    add_action( 'admin_post_kml_map_delete', function () {
-        if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'No permission.', 'glocalsaino-layer-map-viewer' ) );
-
-        $id = intval( $_GET['id'] ?? 0 );
-        check_admin_referer( 'kml_map_delete_' . $id );
-
-        $layers     = json_decode( get_post_meta( $id, '_glocalsaino_map_layers', true ), true ) ?: [];
+    if ( isset( $layers[ $idx ] ) ) {
+        // Borrar archivo físico y su índice espacial en caché
         $upload_dir = wp_upload_dir();
-        foreach ( $layers as $layer ) {
-            $path = str_replace( $upload_dir['baseurl'], $upload_dir['basedir'], $layer['url'] );
-            if ( file_exists( $path ) ) wp_delete_file( $path );
-            kml_map_delete_dir_recursive( kml_map_tile_dir( $layer['url'] ) );
+        $path = str_replace( $upload_dir['baseurl'], $upload_dir['basedir'], $layers[ $idx ]['url'] );
+        if ( file_exists( $path ) ) wp_delete_file( $path );
+        kml_map_delete_dir_recursive( kml_map_tile_dir( $layers[ $idx ]['url'] ) );
+
+        $removed_layer_name = $layers[ $idx ]['name'] ?? '';
+
+        array_splice( $layers, $idx, 1 );
+        kml_map_save_layers( $map_id, array_values( $layers ) );
+
+        kml_map_prune_fields_after_layer_removed( $map_id, $removed_layer_name );
+    }
+
+    wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&deleted_layer=1' ) ); exit;
+} );
+
+// ---------------------------------------------------------------------------
+// Acción: eliminar mapa completo
+// ---------------------------------------------------------------------------
+add_action( 'admin_post_kml_map_delete', function () {
+    if ( ! current_user_can( 'upload_files' ) ) wp_die( esc_html__( 'No permission.', 'glocalsaino-layer-map-viewer' ) );
+
+    $id = intval( $_GET['id'] ?? 0 );
+    check_admin_referer( 'kml_map_delete_' . $id );
+
+    $layers     = json_decode( get_post_meta( $id, '_glocalsaino_map_layers', true ), true ) ?: [];
+    $upload_dir = wp_upload_dir();
+    foreach ( $layers as $layer ) {
+        $path = str_replace( $upload_dir['baseurl'], $upload_dir['basedir'], $layer['url'] );
+        if ( file_exists( $path ) ) wp_delete_file( $path );
+        kml_map_delete_dir_recursive( kml_map_tile_dir( $layer['url'] ) );
+    }
+
+    wp_delete_post( $id, true );
+    wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&deleted=1' ) ); exit;
+} );
+
+// ---------------------------------------------------------------------------
+// Shortcode [glocalsaino_map id="X"] o [glocalsaino_map id="X" height="600px"]
+// ---------------------------------------------------------------------------
+add_shortcode( 'glocalsaino_map', function ( $atts ) {
+    $atts    = shortcode_atts( [
+        'id'     => 0,
+        'height' => 550,
+        'zoom'   => '',
+        'lat'    => '',
+        'lng'    => '',
+    ], $atts );
+    $post_id = intval( $atts['id'] );
+    $height  = sanitize_text_field( $atts['height'] );
+    // Se admite tanto un número suelto ("550", el uso normal) como un
+    // valor CSS completo de toda la vida ("60vh", "550px"), por si
+    // alguien ya lo usaba así.
+    if ( is_numeric( $height ) ) $height .= 'px';
+
+    // Vista inicial explícita (opcional): si no se indican, el mapa
+    // sigue encuadrándose solo a partir de los límites de sus capas (ver
+    // fitAll() en el JS), igual que hasta ahora.
+    $zoom = ( '' !== $atts['zoom'] && is_numeric( $atts['zoom'] ) ) ? (float) $atts['zoom'] : null;
+    $lat  = ( '' !== $atts['lat'] && is_numeric( $atts['lat'] ) && abs( (float) $atts['lat'] ) <= 90 ) ? (float) $atts['lat'] : null;
+    $lng  = ( '' !== $atts['lng'] && is_numeric( $atts['lng'] ) && abs( (float) $atts['lng'] ) <= 180 ) ? (float) $atts['lng'] : null;
+
+    if ( ! $post_id ) return '<!-- kml_map: falta el atributo id -->';
+
+    $layers_json = get_post_meta( $post_id, '_glocalsaino_map_layers', true );
+    // Cadena vacía = no existe ese meta, es decir, el id no corresponde a
+    // ningún mapa (a diferencia de un mapa real sin capas todavía, cuyo
+    // meta siempre se guarda como "[]", nunca como cadena vacía).
+    if ( '' === $layers_json ) return '<!-- kml_map: mapa no encontrado -->';
+    $layers = json_decode( $layers_json, true );
+    if ( ! is_array( $layers ) ) $layers = [];
+
+    // 'bounds' y los valores del filtro se calculan y cachean al visitar el
+    // admin (ver admin-page.php), nunca aquí: leer y escanear cada KML es
+    // relativamente costoso, y hacerlo en el front-end en cada visita podría
+    // ralentizar o incluso agotar el tiempo de ejecución de PHP en el
+    // hosting. Si por lo que sea aún no hay caché, el mapa se degrada con
+    // elegancia: sin bounds usa una vista de partida (ver fitAll() en el JS)
+    // y sin valores de filtro este se va completando según se cargan capas.
+    $fields_visible = json_decode( get_post_meta( $post_id, '_glocalsaino_map_fields_visible', true ), true );
+    // Vacío por defecto (versión gratuita, o premium sin configurar):
+    // el filtro no aparece hasta que se elige un campo en "Campos del
+    // popup" (función premium).
+    $filter_field   = get_post_meta( $post_id, '_glocalsaino_map_filter_field', true ) ?: '';
+
+    $filter_values_field = get_post_meta( $post_id, '_glocalsaino_map_filter_values_field', true );
+    $filter_values        = ( $filter_values_field === $filter_field )
+        ? ( json_decode( get_post_meta( $post_id, '_glocalsaino_map_filter_values', true ), true ) ?: [] )
+        : [];
+    $filter_value_bounds = ( $filter_values_field === $filter_field )
+        ? ( json_decode( get_post_meta( $post_id, '_glocalsaino_map_filter_value_bounds', true ), true ) ?: [] )
+        : [];
+
+    // Aspecto personalizado de la caja de filtro (función premium, ver
+    // kml_map_set_bar_style); se aplica como variables CSS en el wrapper,
+    // así que si no se ha personalizado nada el CSS usa sus colores de
+    // siempre (ver assets/css/map.css).
+    $bar_style      = json_decode( get_post_meta( $post_id, '_glocalsaino_map_bar_style', true ), true ) ?: [];
+    $bar_style_vars = '';
+    foreach ( [
+        'bar_bg'   => '--kml-bar-bg',
+        'bar_text' => '--kml-bar-text',
+        'btn_bg'   => '--kml-btn-bg',
+        'btn_text' => '--kml-btn-text',
+    ] as $key => $css_var ) {
+        if ( ! empty( $bar_style[ $key ] ) ) {
+            $color = sanitize_hex_color( $bar_style[ $key ] );
+            if ( $color ) $bar_style_vars .= $css_var . ':' . $color . ';';
         }
+    }
 
-        wp_delete_post( $id, true );
-        wp_safe_redirect( admin_url( 'admin.php?page=glocalsaino-maps&deleted=1' ) ); exit;
-    } );
+    // Leaflet se sirve empaquetado con el propio plugin (no desde un CDN
+    // externo): un CDN de terceros es un punto de fallo fuera de nuestro
+    // control y WordPress.org no permite cargar librerías de terceros así.
+    wp_enqueue_style(
+        'leaflet-css',
+        KML_MAP_URL . 'assets/vendor/leaflet/leaflet.css',
+        [], '1.9.4'
+    );
+    wp_enqueue_script(
+        'leaflet-js',
+        KML_MAP_URL . 'assets/vendor/leaflet/leaflet.js',
+        [], '1.9.4', true
+    );
+    // Agrupa en clústeres los marcadores de punto que quedan muy juntos
+    // (a un nivel de zoom bajo, o simplemente porque hay muchos en el
+    // mismo sitio), en vez de dejarlos apilados unos encima de otros sin
+    // poder distinguirlos ni hacer clic en el de abajo.
+    wp_enqueue_style(
+        'leaflet-markercluster-css',
+        KML_MAP_URL . 'assets/vendor/leaflet.markercluster/MarkerCluster.css',
+        [ 'leaflet-css' ], '1.5.3'
+    );
+    wp_enqueue_style(
+        'leaflet-markercluster-default-css',
+        KML_MAP_URL . 'assets/vendor/leaflet.markercluster/MarkerCluster.Default.css',
+        [ 'leaflet-markercluster-css' ], '1.5.3'
+    );
+    wp_enqueue_script(
+        'leaflet-markercluster-js',
+        KML_MAP_URL . 'assets/vendor/leaflet.markercluster/leaflet.markercluster.js',
+        [ 'leaflet-js' ], '1.5.3', true
+    );
+    wp_enqueue_style(
+        'glocalsaino-map-css',
+        KML_MAP_URL . 'assets/css/map.css',
+        [ 'leaflet-css' ], KML_MAP_VERSION
+    );
+    wp_enqueue_script(
+        'glocalsaino-map-js',
+        KML_MAP_URL . 'assets/js/kml-map.js',
+        [ 'leaflet-js', 'leaflet-markercluster-js' ], KML_MAP_VERSION, true
+    );
+    // El navegador ya no descarga los KML: pide solo los objetos visibles a
+    // este endpoint (ver kml_map_rest_get_features), construido a partir del
+    // índice espacial que se genera en segundo plano tras la subida.
+    //
+    // La cadena traducible con marcadores se saca del array de abajo a su
+    // propia línea, igual que en admin-page.php.
+    /* translators: 1: layer name, 2: objects loaded, 3: total objects */
+    $kml_map_loading_template = __( '%1$s: loading objects… (%2$s of %3$s)', 'glocalsaino-layer-map-viewer' );
+    /* translators: %d: always 1 (singular) */
+    $kml_map_minute_ago_template = __( '%d minute ago', 'glocalsaino-layer-map-viewer' );
+    /* translators: %d: number of minutes */
+    $kml_map_minutes_ago_template = __( '%d minutes ago', 'glocalsaino-layer-map-viewer' );
 
-    // ---------------------------------------------------------------------------
-    // Shortcode [glocalsaino_map id="X"] o [glocalsaino_map id="X" height="600px"]
-    // ---------------------------------------------------------------------------
-    add_shortcode( 'glocalsaino_map', function ( $atts ) {
-        $atts    = shortcode_atts( [
-            'id'     => 0,
-            'height' => 550,
-            'zoom'   => '',
-            'lat'    => '',
-            'lng'    => '',
-        ], $atts );
-        $post_id = intval( $atts['id'] );
-        $height  = sanitize_text_field( $atts['height'] );
-        // Se admite tanto un número suelto ("550", el uso normal) como un
-        // valor CSS completo de toda la vida ("60vh", "550px"), por si
-        // alguien ya lo usaba así.
-        if ( is_numeric( $height ) ) $height .= 'px';
+    // Capas base: OpenStreetMap y Satélite (Esri World Imagery, un
+    // servicio de teselas documentado para este uso, a diferencia del
+    // endpoint no oficial de Google que se usaba antes) vienen siempre;
+    // el filtro deja que un add-on añada más (topográfico, estilos
+    // claro/oscuro, etc.) sin tocar este archivo. Cada entrada trae ya
+    // todo lo que necesita L.tileLayer() en el JS (url + options), así
+    // ese lado no necesita saber nada de las capas de antemano.
+    $base_layers = apply_filters( 'glocalsaino_map_base_layers', [
+        [
+            'id'      => 'osm',
+            'label'   => 'OpenStreetMap', // nombre propio, no se traduce
+            'url'     => 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            'options' => [ 'attribution' => '© OpenStreetMap' ],
+        ],
+        [
+            'id'      => 'satellite',
+            'label'   => __( 'Satellite', 'glocalsaino-layer-map-viewer' ),
+            'url'     => 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            'options' => [ 'attribution' => 'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community' ],
+            'default' => true,
+        ],
+    ] );
 
-        // Vista inicial explícita (opcional): si no se indican, el mapa
-        // sigue encuadrándose solo a partir de los límites de sus capas (ver
-        // fitAll() en el JS), igual que hasta ahora.
-        $zoom = ( '' !== $atts['zoom'] && is_numeric( $atts['zoom'] ) ) ? (float) $atts['zoom'] : null;
-        $lat  = ( '' !== $atts['lat'] && is_numeric( $atts['lat'] ) && abs( (float) $atts['lat'] ) <= 90 ) ? (float) $atts['lat'] : null;
-        $lng  = ( '' !== $atts['lng'] && is_numeric( $atts['lng'] ) && abs( (float) $atts['lng'] ) <= 180 ) ? (float) $atts['lng'] : null;
+    wp_localize_script( 'glocalsaino-map-js', 'GlocalSainoMapConfig', [
+        'restUrl'    => esc_url_raw( rest_url( 'glocalsaino-map/v1/features' ) ),
+        'baseLayers' => $base_layers,
+        // Textos del JS (ver assets/js/kml-map.js): así se pueden traducir
+        // igual que el resto del plugin, sin depender de generar archivos
+        // .json de traducción por script (wp_set_script_translations).
+        'i18n'    => [
+            'loadingTemplate' => $kml_map_loading_template,
+            // Para el aviso de capas "en directo" (ver liveRefreshMinutes
+            // en el JS); genérico, no sabe qué add-on o fuente de datos
+            // hay detrás.
+            'justNow'         => __( 'just now', 'glocalsaino-layer-map-viewer' ),
+            'minuteAgo'       => $kml_map_minute_ago_template,
+            'minutesAgo'      => $kml_map_minutes_ago_template,
+            'updating'        => __( 'updating…', 'glocalsaino-layer-map-viewer' ),
+            // Resumen del desplegable cuando hay varias capas en directo
+            // a la vez (ver updateLiveIndicator() en el JS); con una
+            // sola no hace falta, se muestra ella sola sin plegar.
+            'liveLayersLabel' => __( 'live layers', 'glocalsaino-layer-map-viewer' ),
+        ],
+    ] );
 
-        if ( ! $post_id ) return '<!-- kml_map: falta el atributo id -->';
+    static $instance = 0;
+    $instance++;
+    $uid = 'kmlmap_' . $post_id . '_' . $instance;
 
-        $layers_json = get_post_meta( $post_id, '_glocalsaino_map_layers', true );
-        // Cadena vacía = no existe ese meta, es decir, el id no corresponde a
-        // ningún mapa (a diferencia de un mapa real sin capas todavía, cuyo
-        // meta siempre se guarda como "[]", nunca como cadena vacía).
-        if ( '' === $layers_json ) return '<!-- kml_map: mapa no encontrado -->';
-        $layers = json_decode( $layers_json, true );
-        if ( ! is_array( $layers ) ) $layers = [];
-
-        // 'bounds' y los valores del filtro se calculan y cachean al visitar el
-        // admin (ver admin-page.php), nunca aquí: leer y escanear cada KML es
-        // relativamente costoso, y hacerlo en el front-end en cada visita podría
-        // ralentizar o incluso agotar el tiempo de ejecución de PHP en el
-        // hosting. Si por lo que sea aún no hay caché, el mapa se degrada con
-        // elegancia: sin bounds usa una vista de partida (ver fitAll() en el JS)
-        // y sin valores de filtro este se va completando según se cargan capas.
-        $fields_visible = json_decode( get_post_meta( $post_id, '_glocalsaino_map_fields_visible', true ), true );
-        // Vacío por defecto (versión gratuita, o premium sin configurar):
-        // el filtro no aparece hasta que se elige un campo en "Campos del
-        // popup" (función premium).
-        $filter_field   = get_post_meta( $post_id, '_glocalsaino_map_filter_field', true ) ?: '';
-
-        $filter_values_field = get_post_meta( $post_id, '_glocalsaino_map_filter_values_field', true );
-        $filter_values        = ( $filter_values_field === $filter_field )
-            ? ( json_decode( get_post_meta( $post_id, '_glocalsaino_map_filter_values', true ), true ) ?: [] )
-            : [];
-        $filter_value_bounds = ( $filter_values_field === $filter_field )
-            ? ( json_decode( get_post_meta( $post_id, '_glocalsaino_map_filter_value_bounds', true ), true ) ?: [] )
-            : [];
-
-        // Aspecto personalizado de la caja de filtro (función premium, ver
-        // kml_map_set_bar_style); se aplica como variables CSS en el wrapper,
-        // así que si no se ha personalizado nada el CSS usa sus colores de
-        // siempre (ver assets/css/map.css).
-        $bar_style      = json_decode( get_post_meta( $post_id, '_glocalsaino_map_bar_style', true ), true ) ?: [];
-        $bar_style_vars = '';
-        foreach ( [
-            'bar_bg'   => '--kml-bar-bg',
-            'bar_text' => '--kml-bar-text',
-            'btn_bg'   => '--kml-btn-bg',
-            'btn_text' => '--kml-btn-text',
-        ] as $key => $css_var ) {
-            if ( ! empty( $bar_style[ $key ] ) ) {
-                $color = sanitize_hex_color( $bar_style[ $key ] );
-                if ( $color ) $bar_style_vars .= $css_var . ':' . $color . ';';
-            }
-        }
-
-        // Leaflet se sirve empaquetado con el propio plugin (no desde un CDN
-        // externo): un CDN de terceros es un punto de fallo fuera de nuestro
-        // control y WordPress.org no permite cargar librerías de terceros así.
-        wp_enqueue_style(
-            'leaflet-css',
-            KML_MAP_URL . 'assets/vendor/leaflet/leaflet.css',
-            [], '1.9.4'
-        );
-        wp_enqueue_script(
-            'leaflet-js',
-            KML_MAP_URL . 'assets/vendor/leaflet/leaflet.js',
-            [], '1.9.4', true
-        );
-        // Agrupa en clústeres los marcadores de punto que quedan muy juntos
-        // (a un nivel de zoom bajo, o simplemente porque hay muchos en el
-        // mismo sitio), en vez de dejarlos apilados unos encima de otros sin
-        // poder distinguirlos ni hacer clic en el de abajo.
-        wp_enqueue_style(
-            'leaflet-markercluster-css',
-            KML_MAP_URL . 'assets/vendor/leaflet.markercluster/MarkerCluster.css',
-            [ 'leaflet-css' ], '1.5.3'
-        );
-        wp_enqueue_style(
-            'leaflet-markercluster-default-css',
-            KML_MAP_URL . 'assets/vendor/leaflet.markercluster/MarkerCluster.Default.css',
-            [ 'leaflet-markercluster-css' ], '1.5.3'
-        );
-        wp_enqueue_script(
-            'leaflet-markercluster-js',
-            KML_MAP_URL . 'assets/vendor/leaflet.markercluster/leaflet.markercluster.js',
-            [ 'leaflet-js' ], '1.5.3', true
-        );
-        wp_enqueue_style(
-            'glocalsaino-map-css',
-            KML_MAP_URL . 'assets/css/map.css',
-            [ 'leaflet-css' ], KML_MAP_VERSION
-        );
-        wp_enqueue_script(
-            'glocalsaino-map-js',
-            KML_MAP_URL . 'assets/js/kml-map.js',
-            [ 'leaflet-js', 'leaflet-markercluster-js' ], KML_MAP_VERSION, true
-        );
-        // El navegador ya no descarga los KML: pide solo los objetos visibles a
-        // este endpoint (ver kml_map_rest_get_features), construido a partir del
-        // índice espacial que se genera en segundo plano tras la subida.
-        //
-        // La cadena traducible con marcadores se saca del array de abajo a su
-        // propia línea: dentro de un array literal, el comentario
-        // "translators:" no sobrevive al reformateo que hace Freemius al
-        // generar la versión gratuita (lo elimina), así que aquí precede a
-        // una asignación suelta, igual que en admin-page.php, donde sí se
-        // conserva.
-        /* translators: 1: layer name, 2: objects loaded, 3: total objects */
-        $kml_map_loading_template = __( '%1$s: loading objects… (%2$s of %3$s)', 'glocalsaino-layer-map-viewer' );
-        /* translators: %d: always 1 (singular) */
-        $kml_map_minute_ago_template = __( '%d minute ago', 'glocalsaino-layer-map-viewer' );
-        /* translators: %d: number of minutes */
-        $kml_map_minutes_ago_template = __( '%d minutes ago', 'glocalsaino-layer-map-viewer' );
-
-        // Capas base: OpenStreetMap y Satélite (Esri World Imagery, un
-        // servicio de teselas documentado para este uso, a diferencia del
-        // endpoint no oficial de Google que se usaba antes) vienen siempre;
-        // el filtro deja que un add-on añada más (topográfico, estilos
-        // claro/oscuro, etc.) sin tocar este archivo. Cada entrada trae ya
-        // todo lo que necesita L.tileLayer() en el JS (url + options), así
-        // ese lado no necesita saber nada de las capas de antemano.
-        $base_layers = apply_filters( 'glocalsaino_map_base_layers', [
-            [
-                'id'      => 'osm',
-                'label'   => 'OpenStreetMap', // nombre propio, no se traduce
-                'url'     => 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                'options' => [ 'attribution' => '© OpenStreetMap' ],
-            ],
-            [
-                'id'      => 'satellite',
-                'label'   => __( 'Satellite', 'glocalsaino-layer-map-viewer' ),
-                'url'     => 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                'options' => [ 'attribution' => 'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community' ],
-                'default' => true,
-            ],
-        ] );
-
-        wp_localize_script( 'glocalsaino-map-js', 'GlocalSainoMapConfig', [
-            'restUrl'    => esc_url_raw( rest_url( 'glocalsaino-map/v1/features' ) ),
-            'baseLayers' => $base_layers,
-            // Textos del JS (ver assets/js/kml-map.js): así se pueden traducir
-            // igual que el resto del plugin, sin depender de generar archivos
-            // .json de traducción por script (wp_set_script_translations).
-            'i18n'    => [
-                'loadingTemplate' => $kml_map_loading_template,
-                // Para el aviso de capas "en directo" (ver liveRefreshMinutes
-                // en el JS); genérico, no sabe qué add-on o fuente de datos
-                // hay detrás.
-                'justNow'         => __( 'just now', 'glocalsaino-layer-map-viewer' ),
-                'minuteAgo'       => $kml_map_minute_ago_template,
-                'minutesAgo'      => $kml_map_minutes_ago_template,
-                'updating'        => __( 'updating…', 'glocalsaino-layer-map-viewer' ),
-                // Resumen del desplegable cuando hay varias capas en directo
-                // a la vez (ver updateLiveIndicator() en el JS); con una
-                // sola no hace falta, se muestra ella sola sin plegar.
-                'liveLayersLabel' => __( 'live layers', 'glocalsaino-layer-map-viewer' ),
-            ],
-        ] );
-
-        static $instance = 0;
-        $instance++;
-        $uid = 'kmlmap_' . $post_id . '_' . $instance;
-
-        ob_start();
-        ?>
-        <div class="kml-map-wrapper" style="height:<?php echo esc_attr( $height ); ?>;<?php echo esc_attr( $bar_style_vars ); ?>">
-            <div class="kml-map-canvas"
-                 id="<?php echo esc_attr( $uid ); ?>"
-                 data-kml-layers="<?php echo esc_attr( wp_json_encode( $layers, JSON_UNESCAPED_UNICODE ) ); ?>"
-                 data-kml-fields="<?php echo esc_attr( wp_json_encode( $fields_visible, JSON_UNESCAPED_UNICODE ) ); ?>"
-                 data-kml-filter-field="<?php echo esc_attr( $filter_field ); ?>"
-                 data-kml-filter-values="<?php echo esc_attr( wp_json_encode( $filter_values, JSON_UNESCAPED_UNICODE ) ); ?>"
-                 data-kml-filter-value-bounds="<?php echo esc_attr( wp_json_encode( $filter_value_bounds, JSON_UNESCAPED_UNICODE ) ); ?>"
-                 data-kml-zoom="<?php echo esc_attr( null === $zoom ? '' : $zoom ); ?>"
-                 data-kml-lat="<?php echo esc_attr( null === $lat ? '' : $lat ); ?>"
-                 data-kml-lng="<?php echo esc_attr( null === $lng ? '' : $lng ); ?>">
-            </div>
-            <?php if ( $filter_field ) : ?>
-            <div class="kml-map-bar" id="<?php echo esc_attr( $uid ); ?>-bar">
-                <div class="kml-filter-group">
-                    <span class="kml-filter-label"><?php esc_html_e( 'Filter by:', 'glocalsaino-layer-map-viewer' ); ?></span>
-                    <select class="kml-filter-select"
-                            id="<?php echo esc_attr( $uid ); ?>-sel"
-                            multiple size="4"></select>
-                    <button class="kml-clear-btn"
-                            id="<?php echo esc_attr( $uid ); ?>-clear">
-                        &#x2715; <?php esc_html_e( 'Clear filter', 'glocalsaino-layer-map-viewer' ); ?>
-                    </button>
-                </div>
-            </div>
-            <?php endif; ?>
+    ob_start();
+    ?>
+    <div class="kml-map-wrapper" style="height:<?php echo esc_attr( $height ); ?>;<?php echo esc_attr( $bar_style_vars ); ?>">
+        <div class="kml-map-canvas"
+             id="<?php echo esc_attr( $uid ); ?>"
+             data-kml-layers="<?php echo esc_attr( wp_json_encode( $layers, JSON_UNESCAPED_UNICODE ) ); ?>"
+             data-kml-fields="<?php echo esc_attr( wp_json_encode( $fields_visible, JSON_UNESCAPED_UNICODE ) ); ?>"
+             data-kml-filter-field="<?php echo esc_attr( $filter_field ); ?>"
+             data-kml-filter-values="<?php echo esc_attr( wp_json_encode( $filter_values, JSON_UNESCAPED_UNICODE ) ); ?>"
+             data-kml-filter-value-bounds="<?php echo esc_attr( wp_json_encode( $filter_value_bounds, JSON_UNESCAPED_UNICODE ) ); ?>"
+             data-kml-zoom="<?php echo esc_attr( null === $zoom ? '' : $zoom ); ?>"
+             data-kml-lat="<?php echo esc_attr( null === $lat ? '' : $lat ); ?>"
+             data-kml-lng="<?php echo esc_attr( null === $lng ? '' : $lng ); ?>">
         </div>
         <?php
-        return ob_get_clean();
-    } );
-
-}
+        // La leyenda (color + nombre de cada capa añadida, sin las capas
+        // base) se rellena en el JS a partir de data-kml-layers, así que
+        // la barra ahora también aparece sin campo de filtro configurado
+        // con tal de que haya alguna capa que listar en la leyenda.
+        $show_legend = ! empty( $layers );
+        $show_bar    = $filter_field || $show_legend;
+        ?>
+        <?php if ( $show_bar ) : ?>
+        <div class="kml-map-bar" id="<?php echo esc_attr( $uid ); ?>-bar">
+            <?php if ( $filter_field ) : ?>
+            <div class="kml-filter-group">
+                <span class="kml-filter-label"><?php esc_html_e( 'Filter by:', 'glocalsaino-layer-map-viewer' ); ?></span>
+                <select class="kml-filter-select"
+                        id="<?php echo esc_attr( $uid ); ?>-sel"
+                        multiple size="4"></select>
+                <button class="kml-clear-btn"
+                        id="<?php echo esc_attr( $uid ); ?>-clear">
+                    &#x2715; <?php esc_html_e( 'Clear filter', 'glocalsaino-layer-map-viewer' ); ?>
+                </button>
+            </div>
+            <?php endif; ?>
+            <?php if ( $show_legend ) : ?>
+            <div class="kml-legend"></div>
+            <?php endif; ?>
+        </div>
+        <?php endif; ?>
+    </div>
+    <?php
+    return ob_get_clean();
+} );
