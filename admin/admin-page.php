@@ -217,6 +217,14 @@ $palette = [
 
             $fields_visible = json_decode( get_post_meta( $map->ID, '_glocalsaino_map_fields_visible', true ), true );
             $bar_style      = json_decode( get_post_meta( $map->ID, '_glocalsaino_map_bar_style', true ), true ) ?: [];
+
+            // Mismos valores que ve el front-end (ver el shortcode): solo
+            // válidos si se calcularon para el campo de filtro actualmente
+            // seleccionado, nunca para uno anterior.
+            $filter_values_field = get_post_meta( $map->ID, '_glocalsaino_map_filter_values_field', true );
+            $filter_values        = ( $filter_field && $filter_values_field === $filter_field )
+                ? ( json_decode( get_post_meta( $map->ID, '_glocalsaino_map_filter_values', true ), true ) ?: [] )
+                : [];
         ?>
         <div style="background:#fff;border:1px solid #c3c4c7;border-radius:4px;margin-bottom:18px;max-width:860px">
 
@@ -554,6 +562,54 @@ $palette = [
                             </form>
                         </div>
                     </details>
+
+                <!-- Enlaces de filtro: una URL por cada valor posible del
+                     campo de filtro, que abre el mapa con ese valor ya
+                     preseleccionado. -->
+                <?php if ( $filter_field && $filter_values ) :
+                    $shortcode_url = kml_map_find_shortcode_page_url( $map->ID );
+                ?>
+                    <details style="margin-top:10px">
+                        <summary style="cursor:pointer;color:#2271b1;font-size:13px;font-weight:500;
+                                        list-style:none;display:inline-flex;align-items:center;gap:5px">
+                            <span style="font-size:16px;line-height:1">🔗</span> <?php esc_html_e( 'Filter links', 'glocalsaino-layer-map-viewer' ); ?>
+                        </summary>
+                        <div style="margin-top:10px;padding:14px;background:#f6f7f7;
+                                    border-radius:4px;border:1px solid #ddd">
+                            <?php if ( ! $shortcode_url ) : ?>
+                                <p style="margin:0;font-size:13px;color:#555">
+                                    <?php esc_html_e( 'Paste the shortcode into a published page or post first — the link needs to know where the map is shown.', 'glocalsaino-layer-map-viewer' ); ?>
+                                </p>
+                            <?php else : ?>
+                                <p style="margin:0 0 10px;font-size:13px;color:#555">
+                                    <?php esc_html_e( 'Each link opens the map with that value already selected in the filter, as if a visitor had picked it by hand — share it for a "detail" view instead of the full map.', 'glocalsaino-layer-map-viewer' ); ?>
+                                </p>
+                                <div style="display:flex;flex-direction:column;gap:6px;max-width:600px">
+                                    <?php foreach ( $filter_values as $value ) :
+                                        // rawurlencode() antes de add_query_arg(): esa función NO
+                                        // codifica el valor por su cuenta, así que un valor con
+                                        // espacios o "&" rompería la URL si se le pasara tal cual.
+                                        $link = esc_url( add_query_arg( 'kml_filter', rawurlencode( $value ), $shortcode_url ) );
+                                    ?>
+                                        <div style="display:flex;align-items:center;gap:8px">
+                                            <span style="flex:1;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                                                  title="<?php echo esc_attr( $link ); ?>">
+                                                <strong><?php echo esc_html( $value ); ?></strong>
+                                                — <code style="font-size:11px"><?php echo esc_html( $link ); ?></code>
+                                            </span>
+                                            <button type="button" class="button button-small"
+                                                    onclick="
+                                                        navigator.clipboard.writeText('<?php echo esc_js( $link ); ?>');
+                                                        this.textContent='<?php echo esc_js( __( 'Copied!', 'glocalsaino-layer-map-viewer' ) ); ?>';
+                                                        var b=this; setTimeout(function(){b.textContent='<?php echo esc_js( __( 'Copy link', 'glocalsaino-layer-map-viewer' ) ); ?>';},2000);
+                                                    "><?php esc_html_e( 'Copy link', 'glocalsaino-layer-map-viewer' ); ?></button>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </details>
+                <?php endif; ?>
 
             </div>
         </div>

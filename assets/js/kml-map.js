@@ -142,6 +142,22 @@
             : [];
         var filterSelect = null;
 
+        // Enlace de filtro (ver el panel de administración, sección "Filter
+        // links"): si la URL de la página trae ?kml_filter=valor, ese valor
+        // se preselecciona desde el primer instante, como si un visitante lo
+        // hubiera elegido a mano — currentFilter ya queda listo antes de la
+        // primera petición de cada capa (ver fetchLayerPage), así que esa
+        // primera petición ya sale filtrada, sin tener que pedir primero sin
+        // filtro y luego repetir. Admite varios valores separados por coma,
+        // igual que el propio filtro admite selección múltiple.
+        var urlFilterParam = new URLSearchParams( window.location.search ).get( 'kml_filter' );
+        if ( urlFilterParam !== null ) {
+            urlFilterParam.split( ',' ).forEach( function ( v ) {
+                v = v.trim();
+                if ( filterValues.indexOf( v ) !== -1 && currentFilter.indexOf( v ) === -1 ) currentFilter.push( v );
+            } );
+        }
+
         kmlLayers.forEach( function ( kml, i ) {
             var palette      = COLORS[ i % COLORS.length ];
             var fillColor    = ( kml.color && kml.color.length === 7 ) ? kml.color         : palette.fill;
@@ -292,10 +308,10 @@
         if ( initialView && initialView.lat !== null && initialView.lng !== null ) {
             map.setView( [ initialView.lat, initialView.lng ], initialView.zoom !== null ? initialView.zoom : 8 );
         } else if ( initialView && initialView.zoom !== null ) {
-            fitAll();
+            fitFilteredOrAll();
             map.setZoom( initialView.zoom );
         } else {
-            fitAll();
+            fitFilteredOrAll();
         }
 
         // Control de capas (base + overlays): el usuario puede ocultar o
@@ -558,6 +574,26 @@
             }
         }
 
+        // Encuadra la vista a los objetos que cumplen el filtro actual,
+        // usando los límites por valor precalculados en el servidor (sin
+        // descargar nada); sin filtro, encuadre general (fitAll). Usada
+        // tanto en la vista inicial (si la URL trae ?kml_filter=valor) como
+        // cada vez que se cambia el filtro a mano.
+        function fitFilteredOrAll() {
+            if ( currentFilter.length && filterValueBounds ) {
+                var group = L.latLngBounds( [] );
+                currentFilter.forEach( function ( v ) {
+                    var b = filterValueBounds[ v ];
+                    if ( b ) group.extend( L.latLngBounds( [ b[0], b[1] ], [ b[2], b[3] ] ) );
+                } );
+                if ( group.isValid() ) {
+                    map.fitBounds( group, { padding: [ 20, 20 ] } );
+                    return;
+                }
+            }
+            fitAll();
+        }
+
         // --- Filtro por campo configurable ---
         function initFilterUI() {
             filterSelect = document.getElementById( uid + '-sel' );
@@ -567,6 +603,9 @@
                 var opt         = document.createElement( 'option' );
                 opt.value       = v;
                 opt.textContent = v;
+                // Ya preseleccionado vía ?kml_filter= en la URL (ver más
+                // arriba, donde se rellena currentFilter antes de esto).
+                if ( currentFilter.indexOf( v ) !== -1 ) opt.selected = true;
                 filterSelect.appendChild( opt );
             } );
             filterSelect.size = Math.min( filterValues.length, 6 ) || 1;
@@ -588,19 +627,7 @@
                 if ( filterSelect.options[ i ].selected ) currentFilter.push( filterSelect.options[ i ].value );
             }
 
-            // Encuadrar la vista a los objetos que cumplen el filtro usando
-            // los límites por valor precalculados en el servidor (sin
-            // descargar nada); sin filtro, se vuelve al encuadre general.
-            if ( currentFilter.length && filterValueBounds ) {
-                var group = L.latLngBounds( [] );
-                currentFilter.forEach( function ( v ) {
-                    var b = filterValueBounds[ v ];
-                    if ( b ) group.extend( L.latLngBounds( [ b[0], b[1] ], [ b[2], b[3] ] ) );
-                } );
-                if ( group.isValid() ) map.fitBounds( group, { padding: [ 20, 20 ] } );
-            } else {
-                fitAll();
-            }
+            fitFilteredOrAll();
 
             // El filtro cambia lo que hay que pedir al servidor: se vuelve a
             // cargar cada capa desde cero con el nuevo filtro aplicado.

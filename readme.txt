@@ -2,8 +2,8 @@
 Contributors: glocalsaino, rafammoo
 Tags: kml, map, leaflet, gis, kmz
 Requires at least: 5.8
-Tested up to: 7.1
-Stable tag: 5.14.0
+Tested up to: 7.1.2
+Stable tag: 5.15.0
 Requires PHP: 7.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -99,6 +99,10 @@ This plugin uses Esri's World Imagery service to provide the optional "satellite
 5. Admin panel: "Available maps" section showing the expanded content of the "Add more KML layers", "Popup fields", and "Filter box appearance" options.
 
 == Changelog ==
+
+= 5.15.0 =
+* New "Filter links" section in each map's admin panel: a ready-to-copy link for every value of the filter field, which opens the map with that value already selected — share it for a "detail" view of one category instead of the full map. The link is built automatically from the page where the shortcode is already pasted.
+* Confirmed compatible with WordPress 7.1.2 (the current release).
 
 = 5.14.0 =
 * Removed the Freemius SDK entirely. This plugin has never had a premium version or paid plans of its own, and the "Extensions" submenu it enabled (for promoting the External Data Layers add-on and the rest of the GlocalSaino plugin family) has been self-built since it was introduced, so the SDK had no remaining purpose — External Data Layers is now registered in Freemius as its own independent product instead of a linked add-on of this one. No functional change for site owners; the plugin zip is smaller.

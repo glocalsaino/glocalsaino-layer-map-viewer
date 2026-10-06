@@ -14,7 +14,7 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'KML_MAP_VERSION', '5.14.0' );
+define( 'KML_MAP_VERSION', '5.15.0' );
 define( 'KML_MAP_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'KML_MAP_URL',     plugin_dir_url( __FILE__ ) );
 
@@ -406,6 +406,38 @@ function kml_map_get_layers( $post_id ) {
     if ( '' === $raw ) return [];
     $layers = json_decode( $raw, true );
     return is_array( $layers ) ? $layers : null;
+}
+
+// Busca la primera entrada publicada (página o entrada) donde se haya
+// pegado el shortcode de este mapa, para poder generar enlaces de filtro
+// "de verdad" (URL completa) desde el panel de administración sin que el
+// admin tenga que indicarla a mano. Analiza los shortcodes encontrados en
+// vez de buscar un texto literal porque admite id="1", id='1' o id=1 por
+// igual, tal como WordPress interpreta cualquiera de esas tres formas.
+function kml_map_find_shortcode_page_url( $map_id ) {
+    global $wpdb;
+
+    $posts = $wpdb->get_results(
+        $wpdb->prepare(
+            "SELECT ID, post_content FROM {$wpdb->posts}
+             WHERE post_status = 'publish' AND post_content LIKE %s",
+            '%[glocalsaino_map%'
+        )
+    );
+
+    foreach ( $posts as $post ) {
+        if ( ! preg_match_all( '/' . get_shortcode_regex( [ 'glocalsaino_map' ] ) . '/', $post->post_content, $matches ) ) {
+            continue;
+        }
+        foreach ( $matches[3] as $atts_raw ) {
+            $atts = shortcode_parse_atts( $atts_raw );
+            if ( isset( $atts['id'] ) && (int) $atts['id'] === (int) $map_id ) {
+                return get_permalink( $post->ID );
+            }
+        }
+    }
+
+    return '';
 }
 
 // Helper: carpeta de caché (índice espacial) de una capa, derivada de su URL.
