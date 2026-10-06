@@ -3,7 +3,7 @@
  * Plugin Name:       GlocalSaino Layer Map Viewer
  * Plugin URI:        https://glocalsaino.com/layermapviewer/
  * Description:       Upload one or more KML files and display interactive maps with colored layers, per-field filtering, and transparency control, with no limit on the number of maps.
- * Version:           5.14.0
+ * Version:           5.15.1
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            Glocal Saino
@@ -14,7 +14,7 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'KML_MAP_VERSION', '5.15.0' );
+define( 'KML_MAP_VERSION', '5.15.1' );
 define( 'KML_MAP_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'KML_MAP_URL',     plugin_dir_url( __FILE__ ) );
 
@@ -420,24 +420,49 @@ function kml_map_find_shortcode_page_url( $map_id ) {
     $posts = $wpdb->get_results(
         $wpdb->prepare(
             "SELECT ID, post_content FROM {$wpdb->posts}
-             WHERE post_status = 'publish' AND post_content LIKE %s",
-            '%[glocalsaino_map%'
+             WHERE post_status = 'publish' AND ( post_content LIKE %s OR post_content LIKE %s )",
+            '%[glocalsaino_map%',
+            '%[vc_raw_html%'
         )
     );
 
     foreach ( $posts as $post ) {
-        if ( ! preg_match_all( '/' . get_shortcode_regex( [ 'glocalsaino_map' ] ) . '/', $post->post_content, $matches ) ) {
-            continue;
+        if ( kml_map_content_has_shortcode_id( $post->post_content, $map_id ) ) {
+            return get_permalink( $post->ID );
         }
-        foreach ( $matches[3] as $atts_raw ) {
-            $atts = shortcode_parse_atts( $atts_raw );
-            if ( isset( $atts['id'] ) && (int) $atts['id'] === (int) $map_id ) {
-                return get_permalink( $post->ID );
+
+        // El elemento "Raw HTML" de WPBakery Page Builder no guarda su
+        // contenido tal cual en post_content, para protegerlo de
+        // wpautop()/wptexturize(): lo codifica como
+        // [vc_raw_html]base64(urlencode(html))[/vc_raw_html], así que el
+        // shortcode nunca aparece literalmente ahí — hay que decodificar
+        // cada bloque de este tipo y mirar dentro.
+        if ( preg_match_all( '/\[vc_raw_html\](.*?)\[\/vc_raw_html\]/s', $post->post_content, $raw_blocks ) ) {
+            foreach ( $raw_blocks[1] as $encoded ) {
+                $decoded = base64_decode( $encoded, true );
+                if ( false === $decoded ) continue;
+
+                if ( kml_map_content_has_shortcode_id( urldecode( $decoded ), $map_id ) ) {
+                    return get_permalink( $post->ID );
+                }
             }
         }
     }
 
     return '';
+}
+
+function kml_map_content_has_shortcode_id( $content, $map_id ) {
+    if ( ! preg_match_all( '/' . get_shortcode_regex( [ 'glocalsaino_map' ] ) . '/', $content, $matches ) ) {
+        return false;
+    }
+    foreach ( $matches[3] as $atts_raw ) {
+        $atts = shortcode_parse_atts( $atts_raw );
+        if ( isset( $atts['id'] ) && (int) $atts['id'] === (int) $map_id ) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Helper: carpeta de caché (índice espacial) de una capa, derivada de su URL.

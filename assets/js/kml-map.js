@@ -299,20 +299,43 @@
             legendItems.push( { name: kml.name, fillColor: fillColor, strokeColor: strokeColor, hasFill: hasFill } );
         } );
 
-        // Vista inicial: si el shortcode indica un centro explícito (lat+lng),
-        // ese manda siempre, con el zoom indicado o 8 por defecto. Si solo se
-        // indica el zoom (sin centro), se mantiene el encuadre automático por
-        // límites pero forzando ese nivel de zoom. Sin ninguno de los dos, se
-        // encuadra solo a partir de los límites ya conocidos (sin pedir nada
-        // al servidor), como siempre.
-        if ( initialView && initialView.lat !== null && initialView.lng !== null ) {
-            map.setView( [ initialView.lat, initialView.lng ], initialView.zoom !== null ? initialView.zoom : 8 );
-        } else if ( initialView && initialView.zoom !== null ) {
-            fitFilteredOrAll();
-            map.setZoom( initialView.zoom );
-        } else {
-            fitFilteredOrAll();
-        }
+        // Vista inicial: si la URL trae un filtro preseleccionado (ver
+        // ?kml_filter= más abajo) y se conocen sus límites, ese encuadre
+        // manda siempre — es precisamente el propósito del enlace de
+        // filtro (mostrar el detalle ya encuadrado), así que pasa por
+        // delante de cualquier vista general que indique el shortcode.
+        // Sin filtro: si el shortcode indica un centro explícito (lat+lng),
+        // ese manda, con el zoom indicado o 8 por defecto. Si solo se
+        // indica el zoom (sin centro), se mantiene el encuadre automático
+        // por límites pero forzando ese nivel de zoom. Sin nada de eso, se
+        // encuadra solo a partir de los límites ya conocidos (sin pedir
+        // nada al servidor), como siempre.
+        //
+        // Se retrasa al siguiente ciclo del navegador (setTimeout 0ms) en
+        // vez de ejecutarse ya mismo: Leaflet calcula el zoom de
+        // fitBounds() a partir del tamaño en píxeles del contenedor, y
+        // justo al cargar la página ese tamaño puede no estar asentado
+        // todavía (sobre todo dentro de columnas responsive de un
+        // constructor de páginas) — fitBounds() puede acabar eligiendo un
+        // zoom equivocado si se llama antes de que el navegador termine de
+        // maquetar. invalidateSize() por sí solo no basta para corregirlo
+        // aquí: Leaflet lo ignora en silencio si el mapa todavía no ha
+        // tenido ninguna vista inicial, que es justo el caso la primera vez
+        // que se llama.
+        setTimeout( function () {
+            map.invalidateSize();
+            var filteredBounds = getFilteredBounds();
+            if ( filteredBounds ) {
+                map.fitBounds( filteredBounds, { padding: [ 20, 20 ] } );
+            } else if ( initialView && initialView.lat !== null && initialView.lng !== null ) {
+                map.setView( [ initialView.lat, initialView.lng ], initialView.zoom !== null ? initialView.zoom : 8 );
+            } else if ( initialView && initialView.zoom !== null ) {
+                fitAll();
+                map.setZoom( initialView.zoom );
+            } else {
+                fitAll();
+            }
+        }, 0 );
 
         // Control de capas (base + overlays): el usuario puede ocultar o
         // volver a mostrar una capa manualmente en cualquier momento;
@@ -574,24 +597,29 @@
             }
         }
 
-        // Encuadra la vista a los objetos que cumplen el filtro actual,
-        // usando los límites por valor precalculados en el servidor (sin
-        // descargar nada); sin filtro, encuadre general (fitAll). Usada
-        // tanto en la vista inicial (si la URL trae ?kml_filter=valor) como
-        // cada vez que se cambia el filtro a mano.
+        // Límites de los objetos que cumplen el filtro actual, usando los
+        // límites por valor precalculados en el servidor (sin descargar
+        // nada) — o null si no hay filtro activo o no se conocen sus
+        // límites. Usada tanto en la vista inicial (si la URL trae
+        // ?kml_filter=valor) como cada vez que se cambia el filtro a mano.
+        function getFilteredBounds() {
+            if ( ! currentFilter.length || ! filterValueBounds ) return null;
+
+            var group = L.latLngBounds( [] );
+            currentFilter.forEach( function ( v ) {
+                var b = filterValueBounds[ v ];
+                if ( b ) group.extend( L.latLngBounds( [ b[0], b[1] ], [ b[2], b[3] ] ) );
+            } );
+            return group.isValid() ? group : null;
+        }
+
         function fitFilteredOrAll() {
-            if ( currentFilter.length && filterValueBounds ) {
-                var group = L.latLngBounds( [] );
-                currentFilter.forEach( function ( v ) {
-                    var b = filterValueBounds[ v ];
-                    if ( b ) group.extend( L.latLngBounds( [ b[0], b[1] ], [ b[2], b[3] ] ) );
-                } );
-                if ( group.isValid() ) {
-                    map.fitBounds( group, { padding: [ 20, 20 ] } );
-                    return;
-                }
+            var bounds = getFilteredBounds();
+            if ( bounds ) {
+                map.fitBounds( bounds, { padding: [ 20, 20 ] } );
+            } else {
+                fitAll();
             }
-            fitAll();
         }
 
         // --- Filtro por campo configurable ---

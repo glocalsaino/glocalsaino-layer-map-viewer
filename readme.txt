@@ -2,8 +2,8 @@
 Contributors: glocalsaino, rafammoo
 Tags: kml, map, leaflet, gis, kmz
 Requires at least: 5.8
-Tested up to: 7.1.2
-Stable tag: 5.15.0
+Tested up to: 7.1.3
+Stable tag: 5.15.1
 Requires PHP: 7.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -99,6 +99,11 @@ This plugin uses Esri's World Imagery service to provide the optional "satellite
 5. Admin panel: "Available maps" section showing the expanded content of the "Add more KML layers", "Popup fields", and "Filter box appearance" options.
 
 == Changelog ==
+
+= 5.15.1 =
+* Fixed the "Filter links" admin section not finding the page where the shortcode is pasted when using WPBakery Page Builder's "Raw HTML" element, which encodes its content instead of storing it as plain text.
+* Fixed the map not zooming to the filtered data when opened via a filter link, on a map whose shortcode also sets an explicit zoom/center — the filtered view now always takes priority. Also fixed the initial zoom sometimes being wrong on page load by waiting for the page layout to settle first.
+* Confirmed compatible with WordPress 7.1.3 (the current release).
 
 = 5.15.0 =
 * New "Filter links" section in each map's admin panel: a ready-to-copy link for every value of the filter field, which opens the map with that value already selected — share it for a "detail" view of one category instead of the full map. The link is built automatically from the page where the shortcode is already pasted.
