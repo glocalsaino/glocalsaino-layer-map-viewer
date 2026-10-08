@@ -148,15 +148,15 @@
         // hubiera elegido a mano — currentFilter ya queda listo antes de la
         // primera petición de cada capa (ver fetchLayerPage), así que esa
         // primera petición ya sale filtrada, sin tener que pedir primero sin
-        // filtro y luego repetir. Admite varios valores separados por coma,
-        // igual que el propio filtro admite selección múltiple.
-        var urlFilterParam = new URLSearchParams( window.location.search ).get( 'kml_filter' );
-        if ( urlFilterParam !== null ) {
-            urlFilterParam.split( ',' ).forEach( function ( v ) {
-                v = v.trim();
-                if ( filterValues.indexOf( v ) !== -1 && currentFilter.indexOf( v ) === -1 ) currentFilter.push( v );
-            } );
-        }
+        // filtro y luego repetir. Para varios valores, se repite el mismo
+        // parámetro (?kml_filter=A&kml_filter=B) en vez de separarlos por
+        // comas dentro de uno solo: un valor puede contener una coma de
+        // verdad (p.ej. "CORUÑA, A"), y no hay forma de distinguirla de la
+        // coma usada como separador una vez decodificada la URL.
+        new URLSearchParams( window.location.search ).getAll( 'kml_filter' ).forEach( function ( v ) {
+            v = v.trim();
+            if ( filterValues.indexOf( v ) !== -1 && currentFilter.indexOf( v ) === -1 ) currentFilter.push( v );
+        } );
 
         kmlLayers.forEach( function ( kml, i ) {
             var palette      = COLORS[ i % COLORS.length ];
@@ -544,8 +544,14 @@
             }
 
             if ( currentFilter.length ) {
-                url += '&filter_field=' + encodeURIComponent( filterField )
-                    + '&filter_values=' + encodeURIComponent( currentFilter.join( ',' ) );
+                // Cada valor va en su propio filter_values[]=, nunca unidos
+                // por comas: un valor puede contener una coma de verdad
+                // (p.ej. "CORUÑA, A"), y uniéndolos no hay forma de que el
+                // servidor distinga esa coma de la usada como separador.
+                url += '&filter_field=' + encodeURIComponent( filterField );
+                currentFilter.forEach( function ( v ) {
+                    url += '&filter_values[]=' + encodeURIComponent( v );
+                } );
             }
 
             fetch( url )

@@ -3,7 +3,7 @@
  * Plugin Name:       GlocalSaino Layer Map Viewer
  * Plugin URI:        https://glocalsaino.com/layermapviewer/
  * Description:       Upload one or more KML files and display interactive maps with colored layers, per-field filtering, and transparency control, with no limit on the number of maps.
- * Version:           5.15.1
+ * Version:           5.15.2
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            Glocal Saino
@@ -14,7 +14,7 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'KML_MAP_VERSION', '5.15.1' );
+define( 'KML_MAP_VERSION', '5.15.2' );
 define( 'KML_MAP_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'KML_MAP_URL',     plugin_dir_url( __FILE__ ) );
 
@@ -1000,8 +1000,20 @@ function kml_map_rest_get_features( WP_REST_Request $req ) {
     $url  = esc_url_raw( $req->get_param( 'url' ) );
     $page = max( 0, intval( $req->get_param( 'page' ) ) );
 
-    $filter_field  = sanitize_text_field( (string) $req->get_param( 'filter_field' ) );
-    $filter_values = array_filter( array_map( 'trim', explode( ',', (string) $req->get_param( 'filter_values' ) ) ) );
+    $filter_field = sanitize_text_field( (string) $req->get_param( 'filter_field' ) );
+
+    // filter_values llega como parámetro de array (filter_values[]=...),
+    // nunca como una lista unida por comas: un valor del propio filtro
+    // puede contener una coma de verdad (p.ej. "CORUÑA, A"), y no hay forma
+    // de distinguirla de la coma usada como separador una vez que el
+    // navegador/PHP decodifican la URL — unir y luego partir por "," rompía
+    // justo esos valores. Como cada aparición de filter_values[] es su
+    // propio parámetro, decodificado por separado, no hay ambigüedad
+    // posible sea lo que sea que contenga cada valor.
+    $filter_values_param = $req->get_param( 'filter_values' );
+    $filter_values        = is_array( $filter_values_param )
+        ? array_filter( array_map( 'trim', $filter_values_param ) )
+        : [];
 
     $tile_dir       = kml_map_tile_dir( $url );
     $features       = [];

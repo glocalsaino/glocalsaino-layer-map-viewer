@@ -3,7 +3,7 @@ Contributors: glocalsaino, rafammoo
 Tags: kml, map, leaflet, gis, kmz
 Requires at least: 5.8
 Tested up to: 7.1.3
-Stable tag: 5.15.1
+Stable tag: 5.15.2
 Requires PHP: 7.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -99,6 +99,9 @@ This plugin uses Esri's World Imagery service to provide the optional "satellite
 5. Admin panel: "Available maps" section showing the expanded content of the "Add more KML layers", "Popup fields", and "Filter box appearance" options.
 
 == Changelog ==
+
+= 5.15.2 =
+* Fixed filtering not matching anything when a filter value itself contains a comma (e.g. "CORUÑA, A") — selecting it by hand, and a shared filter link, now both work correctly. Multiple selected values are no longer joined with commas internally, which was ambiguous for values that contain one.
 
 = 5.15.1 =
 * Fixed the "Filter links" admin section not finding the page where the shortcode is pasted when using WPBakery Page Builder's "Raw HTML" element, which encodes its content instead of storing it as plain text.
