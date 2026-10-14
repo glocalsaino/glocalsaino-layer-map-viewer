@@ -3,7 +3,7 @@
  * Plugin Name:       GlocalSaino Layer Map Viewer
  * Plugin URI:        https://glocalsaino.com/layermapviewer/
  * Description:       Upload one or more KML files and display interactive maps with colored layers, per-field filtering, and transparency control, with no limit on the number of maps.
- * Version:           5.15.2
+ * Version:           5.16.0
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            Glocal Saino
@@ -14,7 +14,7 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'KML_MAP_VERSION', '5.15.2' );
+define( 'KML_MAP_VERSION', '5.16.0' );
 define( 'KML_MAP_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'KML_MAP_URL',     plugin_dir_url( __FILE__ ) );
 
@@ -1548,6 +1548,13 @@ add_shortcode( 'glocalsaino_map', function ( $atts ) {
             // a la vez (ver updateLiveIndicator() en el JS); con una
             // sola no hace falta, se muestra ella sola sin plegar.
             'liveLayersLabel' => __( 'live layers', 'glocalsaino-layer-map-viewer' ),
+            // Botón "Mi ubicación" (ver el control de Leaflet en el JS).
+            'locateMe'        => __( 'Show my location', 'glocalsaino-layer-map-viewer' ),
+            'locateDenied'    => __( 'Location permission denied. Allow it in your browser settings and try again.', 'glocalsaino-layer-map-viewer' ),
+            'locateError'     => __( 'Your location could not be determined.', 'glocalsaino-layer-map-viewer' ),
+            // Botón de pantalla completa (ver el control de Leaflet en el JS).
+            'fullscreenEnter' => __( 'Full screen', 'glocalsaino-layer-map-viewer' ),
+            'fullscreenExit'  => __( 'Exit full screen', 'glocalsaino-layer-map-viewer' ),
         ],
     ] );
 

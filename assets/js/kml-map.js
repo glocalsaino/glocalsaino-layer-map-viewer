@@ -346,6 +346,195 @@
             collapsed: true
         } ).addTo( map );
 
+        // --- "Mi ubicación": posición del usuario sobre el mapa, con
+        // seguimiento continuo mientras se mueve (watch:true, no una foto
+        // fija), igual que Google Maps.
+        //
+        // Arreglo específico para el fallo típico de este tipo de botones
+        // en móvil (confirmado, por ejemplo, en el visor del Catastro): el
+        // navegador puede suspender el GPS cuando la pestaña pasa a
+        // segundo plano, y si nadie se entera de que ha vuelto a primer
+        // plano, el punto se queda clavado para siempre — el usuario
+        // termina teniendo que cerrar y reabrir el navegador (a veces
+        // incluso borrar cookies) para que vuelva a localizar. Aquí, en
+        // vez de eso, se vigila cuánto hace de la última posición recibida
+        // y, si pasa demasiado tiempo sin ninguna (sobre todo justo al
+        // volver a la pestaña), se reinicia el seguimiento solo.
+        var locateActive       = false;
+        var locateMarker       = null;
+        var locateCircle       = null;
+        var locateCenteredOnce = false;
+        var locateLastFixAt    = 0;
+        var locateStaleTimer   = null;
+        var locateBtn          = null;
+
+        function locateOptions() {
+            return { watch: true, enableHighAccuracy: true, maximumAge: 10000 };
+        }
+
+        function onVisibilityChange() {
+            if ( 'visible' === document.visibilityState ) checkLocateStale();
+        }
+
+        function checkLocateStale() {
+            if ( ! locateActive || ! locateLastFixAt ) return;
+            if ( Date.now() - locateLastFixAt > 20000 ) {
+                map.stopLocate();
+                map.locate( locateOptions() );
+            }
+        }
+
+        function startLocate() {
+            locateActive       = true;
+            locateCenteredOnce = false;
+            map.locate( locateOptions() );
+            document.addEventListener( 'visibilitychange', onVisibilityChange );
+            locateStaleTimer = setInterval( checkLocateStale, 10000 );
+        }
+
+        function stopLocate() {
+            locateActive = false;
+            map.stopLocate();
+            document.removeEventListener( 'visibilitychange', onVisibilityChange );
+            if ( locateStaleTimer ) { clearInterval( locateStaleTimer ); locateStaleTimer = null; }
+            if ( locateMarker ) { map.removeLayer( locateMarker ); locateMarker = null; }
+            if ( locateCircle ) { map.removeLayer( locateCircle ); locateCircle = null; }
+        }
+
+        map.on( 'locationfound', function ( e ) {
+            locateLastFixAt = Date.now();
+
+            if ( ! locateMarker ) {
+                locateMarker = L.marker( e.latlng, {
+                    icon: L.divIcon( { className: 'kml-locate-dot', iconSize: [ 16, 16 ], iconAnchor: [ 8, 8 ] } ),
+                    zIndexOffset: 1000,
+                    keyboard: false
+                } ).addTo( map );
+            } else {
+                locateMarker.setLatLng( e.latlng );
+            }
+
+            if ( ! locateCircle ) {
+                locateCircle = L.circle( e.latlng, {
+                    radius: e.accuracy, color: '#4285f4', weight: 1,
+                    fillColor: '#4285f4', fillOpacity: 0.15
+                } ).addTo( map );
+            } else {
+                locateCircle.setLatLng( e.latlng );
+                locateCircle.setRadius( e.accuracy );
+            }
+
+            // Solo centra el mapa en el primer punto recibido: si el
+            // usuario ya se ha puesto a mirar otra parte del mapa, los
+            // siguientes puntos no se lo quitan de donde está.
+            if ( ! locateCenteredOnce ) {
+                map.setView( e.latlng, Math.max( map.getZoom(), 15 ) );
+                locateCenteredOnce = true;
+            }
+        } );
+
+        map.on( 'locationerror', function ( e ) {
+            stopLocate();
+            if ( locateBtn ) locateBtn.classList.remove( 'kml-locate-active' );
+
+            // code 1 = PERMISSION_DENIED (ver la API de geolocalización del
+            // navegador); el resto (posición no disponible, tiempo agotado)
+            // se agrupan en un mensaje genérico.
+            alert( 1 === e.code
+                ? t( 'locateDenied', 'Location permission denied. Allow it in your browser settings and try again.' )
+                : t( 'locateError', 'Your location could not be determined.' ) );
+        } );
+
+        var LocateControl = L.Control.extend( {
+            options: { position: 'bottomright' },
+            onAdd: function () {
+                var container = L.DomUtil.create( 'div', 'leaflet-bar leaflet-control' );
+                locateBtn = L.DomUtil.create( 'a', 'kml-locate-btn', container );
+                locateBtn.href = '#';
+                locateBtn.title = t( 'locateMe', 'Show my location' );
+                locateBtn.setAttribute( 'role', 'button' );
+                locateBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">'
+                    + '<path fill="currentColor" d="M12 2a1 1 0 0 1 1 1v1.06A8.004 8.004 0 0 1 19.94 11H21a1 1 0 1 1 0 2h-1.06A8.004 8.004 0 0 1 13 19.94V21a1 1 0 1 1-2 0v-1.06A8.004 8.004 0 0 1 4.06 13H3a1 1 0 1 1 0-2h1.06A8.004 8.004 0 0 1 11 4.06V3a1 1 0 0 1 1-1zm0 4a6 6 0 1 0 0 12 6 6 0 0 0 0-12zm0 3a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/>'
+                    + '</svg>';
+
+                L.DomEvent.disableClickPropagation( container );
+                L.DomEvent.on( locateBtn, 'click', function ( ev ) {
+                    L.DomEvent.stop( ev );
+                    if ( locateActive ) {
+                        stopLocate();
+                        locateBtn.classList.remove( 'kml-locate-active' );
+                    } else {
+                        startLocate();
+                        locateBtn.classList.add( 'kml-locate-active' );
+                    }
+                } );
+
+                return container;
+            }
+        } );
+        map.addControl( new LocateControl() );
+
+        // --- Pantalla completa: pone todo el bloque del mapa (lienzo +
+        // barra de filtro/leyenda, no solo el lienzo) a ocupar toda la
+        // pantalla, usando la Fullscreen API estándar del navegador — sin
+        // ninguna librería aparte. Si el navegador no la soporta en
+        // absoluto (algunas versiones antiguas de Safari en iPhone no
+        // dejan poner en pantalla completa un elemento cualquiera, solo
+        // vídeos), el botón ni se añade, en vez de mostrar algo que no
+        // funciona.
+        var wrapperEl = document.getElementById( uid ).closest( '.kml-map-wrapper' );
+        var fsRequest  = wrapperEl && ( wrapperEl.requestFullscreen || wrapperEl.webkitRequestFullscreen );
+        var fsExit     = document.exitFullscreen || document.webkitExitFullscreen;
+
+        if ( wrapperEl && fsRequest && fsExit ) {
+            var fsBtn = null;
+
+            function isFullscreen() {
+                return ( document.fullscreenElement || document.webkitFullscreenElement ) === wrapperEl;
+            }
+
+            var fsIconEnter = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 9V4h5v2H6v3H4zm0 6h2v3h3v2H4v-5zm16-6h-2V6h-3V4h5v5zm0 6v5h-5v-2h3v-3h2z"/></svg>';
+            var fsIconExit  = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 4h2v5H6V7h3V4zm-5 9h5v5H7v-3H4v-2zm11-9h5v5h-2V7h-3V4zm3 9h2v5h-5v-2h3v-3z"/></svg>';
+
+            function updateFsBtn() {
+                if ( ! fsBtn ) return;
+                var active = isFullscreen();
+                fsBtn.innerHTML = active ? fsIconExit : fsIconEnter;
+                fsBtn.title      = active
+                    ? t( 'fullscreenExit', 'Exit full screen' )
+                    : t( 'fullscreenEnter', 'Full screen' );
+                setTimeout( function () { map.invalidateSize(); }, 50 );
+            }
+
+            document.addEventListener( 'fullscreenchange', updateFsBtn );
+            document.addEventListener( 'webkitfullscreenchange', updateFsBtn );
+
+            var FullscreenControl = L.Control.extend( {
+                options: { position: 'bottomright' },
+                onAdd: function () {
+                    var container = L.DomUtil.create( 'div', 'leaflet-bar leaflet-control' );
+                    fsBtn = L.DomUtil.create( 'a', 'kml-fullscreen-btn', container );
+                    fsBtn.href = '#';
+                    fsBtn.setAttribute( 'role', 'button' );
+                    fsBtn.innerHTML = fsIconEnter;
+                    fsBtn.title     = t( 'fullscreenEnter', 'Full screen' );
+
+                    L.DomEvent.disableClickPropagation( container );
+                    L.DomEvent.on( fsBtn, 'click', function ( ev ) {
+                        L.DomEvent.stop( ev );
+                        if ( isFullscreen() ) {
+                            fsExit.call( document );
+                        } else {
+                            fsRequest.call( wrapperEl );
+                        }
+                    } );
+
+                    return container;
+                }
+            } );
+            map.addControl( new FullscreenControl() );
+        }
+
         // Leyenda bajo el mapa (color + nombre de cada capa añadida, nunca
         // las capas base): se rellena una sola vez, aquí, independientemente
         // de qué capas estén marcadas como visibles en el control de arriba.

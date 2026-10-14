@@ -3,7 +3,7 @@ Contributors: glocalsaino, rafammoo
 Tags: kml, map, leaflet, gis, kmz
 Requires at least: 5.8
 Tested up to: 7.1.3
-Stable tag: 5.15.2
+Stable tag: 5.16.0
 Requires PHP: 7.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -99,6 +99,10 @@ This plugin uses Esri's World Imagery service to provide the optional "satellite
 5. Admin panel: "Available maps" section showing the expanded content of the "Add more KML layers", "Popup fields", and "Filter box appearance" options.
 
 == Changelog ==
+
+= 5.16.0 =
+* New "Show my location" button on the map: shows your position as a moving blue dot (with an accuracy circle), continuously updated as you move, the same way Google Maps does — so you can tell if you're on or near one of the items shown on a layer. Location is only requested when you tap the button and is never sent to or stored on the server — it stays entirely on your device, shown only on your own screen. Includes a fix for the stale-position bug common to this kind of feature on mobile (the browser can pause location tracking when the tab is in the background; returning to the tab now resumes it automatically instead of leaving the dot frozen).
+* New full screen button: expands the whole map block (not just the canvas) to fill the screen, using the browser's own full screen support.
 
 = 5.15.2 =
 * Fixed filtering not matching anything when a filter value itself contains a comma (e.g. "CORUÑA, A") — selecting it by hand, and a shared filter link, now both work correctly. Multiple selected values are no longer joined with commas internally, which was ambiguous for values that contain one.

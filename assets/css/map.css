@@ -136,6 +136,55 @@
     flex-shrink: 0;
 }
 
+/* Botón "Mi ubicación" (control de Leaflet, misma apariencia que el de
+   zoom: la clase leaflet-bar/leaflet-control ya pone el fondo blanco, el
+   borde y la sombra). El icono usa currentColor, así que basta con
+   cambiar el color del texto para teñirlo cuando está activo. */
+.kml-locate-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    color: #555;
+}
+.kml-locate-btn.kml-locate-active {
+    color: #4285f4;
+}
+
+/* Punto de "aquí estoy" (L.divIcon): mismo lenguaje visual que Google
+   Maps — un punto, no un pin, porque representa una posición que se
+   mueve sola, no un sitio fijo. */
+.kml-locate-dot {
+    width: 16px;
+    height: 16px;
+    background-color: #4285f4;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 0 2px rgba(66, 133, 244, 0.35), 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+/* Botón de pantalla completa: misma apariencia que el de "Mi ubicación". */
+.kml-fullscreen-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    color: #555;
+}
+
+/* En pantalla completa, el bloque entero (mapa + barra de filtro/leyenda)
+   debe ocupar toda la pantalla de verdad, no quedarse con la altura fija
+   del shortcode (p.ej. height="550"). */
+.kml-map-wrapper:fullscreen,
+.kml-map-wrapper:-webkit-full-screen {
+    height: 100vh !important;
+    width: 100vw !important;
+    margin: 0;
+    border-radius: 0;
+}
+
 /* Popup de Leaflet */
 .kml-map-wrapper .leaflet-popup-content {
     font-size: 13px;
