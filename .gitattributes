@@ -1,0 +1,6 @@
+# Excluded from distribution zips built with git archive.
+.gitattributes export-ignore
+.gitignore export-ignore
+.DS_Store export-ignore
+CLAUDE.md export-ignore
+.vscode export-ignore
