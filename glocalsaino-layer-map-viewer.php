@@ -3,7 +3,7 @@
  * Plugin Name:       GlocalSaino Layer Map Viewer
  * Plugin URI:        https://glocalsaino.com/layermapviewer/
  * Description:       Upload one or more KML files and display interactive maps with colored layers, per-field filtering, and transparency control, with no limit on the number of maps.
- * Version:           5.16.0
+ * Version:           5.17.0
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            Glocal Saino
@@ -14,7 +14,7 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'KML_MAP_VERSION', '5.16.0' );
+define( 'KML_MAP_VERSION', '5.17.0' );
 define( 'KML_MAP_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'KML_MAP_URL',     plugin_dir_url( __FILE__ ) );
 
@@ -417,14 +417,26 @@ function kml_map_get_layers( $post_id ) {
 function kml_map_find_shortcode_page_url( $map_id ) {
     global $wpdb;
 
-    $posts = $wpdb->get_results(
-        $wpdb->prepare(
-            "SELECT ID, post_content FROM {$wpdb->posts}
-             WHERE post_status = 'publish' AND ( post_content LIKE %s OR post_content LIKE %s )",
-            '%[glocalsaino_map%',
-            '%[vc_raw_html%'
-        )
-    );
+    // La página de administración llama a esta función una vez por mapa: la
+    // lista de entradas candidatas se guarda en la caché de objetos con una
+    // clave ligada a last_changed de "posts" (el mismo patrón que usa
+    // WP_Query), así que se invalida sola al publicar o editar cualquier
+    // entrada y nunca devuelve una URL desfasada.
+    $cache_key = 'shortcode_posts:' . wp_cache_get_last_changed( 'posts' );
+    $posts     = wp_cache_get( $cache_key, 'glocalsaino_map' );
+
+    if ( ! is_array( $posts ) ) {
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery -- ninguna API de WordPress busca un texto solo en post_content (la búsqueda de WP_Query mira también título y extracto); el resultado se cachea justo debajo.
+        $posts = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT ID, post_content FROM {$wpdb->posts}
+                 WHERE post_status = 'publish' AND ( post_content LIKE %s OR post_content LIKE %s )",
+                '%[glocalsaino_map%',
+                '%[vc_raw_html%'
+            )
+        );
+        wp_cache_set( $cache_key, $posts, 'glocalsaino_map' );
+    }
 
     foreach ( $posts as $post ) {
         if ( kml_map_content_has_shortcode_id( $post->post_content, $map_id ) ) {
@@ -845,7 +857,61 @@ function kml_map_run_analysis( $post_id ) {
         update_post_meta( $post_id, '_glocalsaino_map_filter_values', wp_json_encode( $sorted_values, JSON_UNESCAPED_UNICODE ) );
         update_post_meta( $post_id, '_glocalsaino_map_filter_values_field', $filter_field );
         update_post_meta( $post_id, '_glocalsaino_map_filter_value_bounds', wp_json_encode( $value_bounds, JSON_UNESCAPED_UNICODE ) );
+
+        /**
+         * Fires after a layer of a map has been analyzed and its spatial
+         * index rebuilt: a KML layer just uploaded, a layer re-analyzed
+         * (filter field changed, old index format) or a layer of an add-on
+         * type refreshed (e.g. an External Data Layers source). Read its
+         * items with kml_map_each_layer_feature().
+         *
+         * @since 5.17.0
+         *
+         * @param int   $post_id Map ID.
+         * @param array $layer   Layer, as stored in the map (url, name, type…, analyzed = true).
+         * @param int   $idx     Position of the layer in the map.
+         */
+        do_action( 'glocalsaino_map_layer_analyzed', (int) $post_id, $layers[ $idx ], (int) $idx );
     }
+}
+
+/**
+ * Walks the items of an analyzed layer (read from its spatial index), so
+ * add-ons can use them without parsing the source file again.
+ *
+ * @since 5.17.0
+ *
+ * @param array    $layer    Layer, as stored in the map (needs 'url').
+ * @param callable $callback Receives array( 'geometry' => GeoJSON geometry, 'properties' => field => value, 'bounds' => [ minLat, minLng, maxLat, maxLng ] ).
+ *                           Return false to stop.
+ * @return int Number of items passed to the callback.
+ */
+function kml_map_each_layer_feature( array $layer, callable $callback ) {
+    if ( empty( $layer['url'] ) ) return 0;
+
+    $tile_dir = kml_map_tile_dir( $layer['url'] );
+    if ( ! is_dir( $tile_dir ) ) return 0;
+
+    $files = glob( trailingslashit( $tile_dir ) . '*.ndjson' ) ?: [];
+    sort( $files );
+
+    $count = 0;
+    foreach ( $files as $file ) {
+        foreach ( explode( "\n", (string) file_get_contents( $file ) ) as $line ) {
+            if ( '' === $line ) continue;
+            $f = json_decode( $line, true );
+            if ( ! is_array( $f ) || ! isset( $f['geometry'] ) ) continue;
+
+            $count++;
+            $item = [
+                'geometry'   => $f['geometry'],
+                'properties' => isset( $f['properties'] ) && is_array( $f['properties'] ) ? $f['properties'] : [],
+                'bounds'     => $f['bounds'] ?? null,
+            ];
+            if ( false === call_user_func( $callback, $item ) ) return $count;
+        }
+    }
+    return $count;
 }
 
 // ---------------------------------------------------------------------------
