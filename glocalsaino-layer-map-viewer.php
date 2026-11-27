@@ -184,6 +184,29 @@ function kml_map_render_extensions_page() {
             KML_MAP_URL . 'assets/img/icon-webpagespassworded.png'
         );
         ?>
+
+        <h2 style="margin-top:32px;"><?php esc_html_e( 'Automate what happens on your maps', 'glocalsaino-layer-map-viewer' ); ?></h2>
+        <p style="max-width:760px;font-size:14px;">
+            <?php esc_html_e( 'GlocalSaino Automations Based on Triggers is free; its add-on Automations Bridge connects your maps with your automations.', 'glocalsaino-layer-map-viewer' ); ?>
+        </p>
+
+        <?php
+        kml_map_render_extension_card(
+            __( 'GlocalSaino Automations Based on Triggers', 'glocalsaino-layer-map-viewer' ),
+            __( 'Automate your website without code: when a form is sent, a link or a button is clicked or a file is uploaded, send emails, call webhooks, fill tables or schedule what happens next.', 'glocalsaino-layer-map-viewer' ),
+            defined( 'GSAAT_VERSION' ),
+            'https://glocalsaino.com/automationsbasedontriggers/',
+            KML_MAP_URL . 'assets/img/icon-automations-based-on-triggers.png'
+        );
+
+        kml_map_render_extension_card(
+            __( 'GlocalSaino Automations Bridge', 'glocalsaino-layer-map-viewer' ),
+            __( 'Turn every layer you upload into a searchable table, add points to a map from any form, and get an alert when an external data layer brings new items.', 'glocalsaino-layer-map-viewer' ),
+            defined( 'GSAATB_VERSION' ),
+            'https://glocalsaino.com/automationsbridge/',
+            KML_MAP_URL . 'assets/img/icon-automations-bridge.png'
+        );
+        ?>
     </div>
     <?php
 }

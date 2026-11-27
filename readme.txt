@@ -101,6 +101,7 @@ This plugin uses Esri's World Imagery service to provide the optional "satellite
 == Changelog ==
 
 = 5.17.0 =
+* Extensions: new "Automate what happens on your maps" section with GlocalSaino Automations Based on Triggers and its add-on Automations Bridge.
 * For developers: new `glocalsaino_map_layer_analyzed` action, fired when a layer finishes its background analysis, and new `kml_map_each_layer_feature()` function to read the items of a layer. Lets add-ons (such as automations) react to new or refreshed layers.
 * Faster maps list in the admin: the search for the page where each map is published is now cached and refreshed automatically when a page is published or edited.
 
