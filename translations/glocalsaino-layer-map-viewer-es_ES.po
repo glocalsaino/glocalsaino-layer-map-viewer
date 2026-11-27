@@ -1,0 +1,500 @@
+# Copyright (C) 2026 Glocal Saino
+# This file is distributed under the GPLv2 or later.
+msgid ""
+msgstr ""
+"Project-Id-Version: GlocalSaino Layer Map Viewer 5.17.0\n"
+"Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/glocalsaino-layer-map-viewer\n"
+"Last-Translator: Glocal Saino\n"
+"Language-Team: Spanish (Spain)\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"POT-Creation-Date: 2026-11-27T09:09:44+00:00\n"
+"PO-Revision-Date: 2026-11-27 10:00+0100\n"
+"X-Generator: WP-CLI 2.12.0\n"
+"X-Domain: glocalsaino-layer-map-viewer\n"
+"Language: es_ES\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#. Plugin Name of the plugin
+#: glocalsaino-layer-map-viewer.php
+msgid "GlocalSaino Layer Map Viewer"
+msgstr "GlocalSaino Layer Map Viewer"
+
+#. Plugin URI of the plugin
+#: glocalsaino-layer-map-viewer.php
+msgid "https://glocalsaino.com/layermapviewer/"
+msgstr "https://glocalsaino.com/layermapviewer/"
+
+#. Description of the plugin
+#: glocalsaino-layer-map-viewer.php
+msgid "Upload one or more KML files and display interactive maps with colored layers, per-field filtering, and transparency control, with no limit on the number of maps."
+msgstr "Sube uno o varios archivos KML y muestra mapas interactivos con capas de colores, filtro por campo y control de transparencia, sin límite de mapas."
+
+#. Author of the plugin
+#: glocalsaino-layer-map-viewer.php
+msgid "Glocal Saino"
+msgstr "Glocal Saino"
+
+#: admin/admin-page.php:22
+msgid "You must enter a name for the map."
+msgstr "Debes escribir un nombre para el mapa."
+
+#: admin/admin-page.php:23
+msgid "You must select at least one KML file."
+msgstr "Debes seleccionar al menos un archivo KML."
+
+#: admin/admin-page.php:24
+msgid "Files must have the .kml extension."
+msgstr "Los archivos deben tener la extensión .kml."
+
+#. translators: %s: maximum upload size, already formatted (e.g. "64 MB")
+#: admin/admin-page.php:27
+#, php-format
+msgid "One or more files exceed the maximum upload size allowed by your hosting (%s). Ask whoever manages the server to increase upload_max_filesize/post_max_size, or split the KML into smaller files."
+msgstr "Uno o varios archivos superan el tamaño máximo de subida que permite tu alojamiento (%s). Pide a quien gestione el servidor que aumente upload_max_filesize/post_max_size, o divide el KML en archivos más pequeños."
+
+#: admin/admin-page.php:30
+msgid "This map's layer data could not be read, so nothing was changed to avoid losing your existing layers. Please contact support."
+msgstr "No se han podido leer los datos de las capas de este mapa, así que no se ha cambiado nada para no perder tus capas actuales. Ponte en contacto con el soporte."
+
+#: admin/admin-page.php:46 glocalsaino-layer-map-viewer.php:70
+#: glocalsaino-layer-map-viewer.php:71
+msgid "Layer Map Viewer"
+msgstr "Layer Map Viewer"
+
+#: admin/admin-page.php:82
+msgid "Map created successfully."
+msgstr "Mapa creado correctamente."
+
+#: admin/admin-page.php:85
+msgid "Layer(s) added successfully."
+msgstr "Capa(s) añadida(s) correctamente."
+
+#: admin/admin-page.php:88
+msgid "Map deleted."
+msgstr "Mapa eliminado."
+
+#: admin/admin-page.php:91
+msgid "Layer deleted."
+msgstr "Capa eliminada."
+
+#: admin/admin-page.php:94
+msgid "Field configuration saved."
+msgstr "Configuración de campos guardada."
+
+#: admin/admin-page.php:97
+msgid "Analysis re-triggered in the background. It may take a few minutes for layers with many objects; reload this page later to check."
+msgstr "Análisis relanzado en segundo plano. Puede tardar unos minutos en capas con muchos objetos; vuelve a cargar esta página más tarde para comprobarlo."
+
+#: admin/admin-page.php:100
+msgid "Layer updated."
+msgstr "Capa actualizada."
+
+#: admin/admin-page.php:103
+msgid "Filter box appearance updated."
+msgstr "Aspecto de la caja de filtro actualizado."
+
+#. translators: %s: error message
+#: admin/admin-page.php:111
+#, php-format
+msgid "Error: %s"
+msgstr "Error: %s"
+
+#: admin/admin-page.php:123
+msgid "Create new map"
+msgstr "Crear un mapa nuevo"
+
+#: admin/admin-page.php:132
+msgid "Map name"
+msgstr "Nombre del mapa"
+
+#: admin/admin-page.php:136
+msgid "E.g.: Armental Plots"
+msgstr "Ej.: Parcelas de Armental"
+
+#: admin/admin-page.php:140
+msgid "KML files"
+msgstr "Archivos KML"
+
+#: admin/admin-page.php:148
+msgid "Optional: you can create the map without any KML file and add layers later."
+msgstr "Opcional: puedes crear el mapa sin ningún archivo KML y añadir las capas después."
+
+#: admin/admin-page.php:149
+msgid "You can select several files at once (Ctrl+click or Cmd+click)."
+msgstr "Puedes seleccionar varios archivos a la vez (Ctrl+clic o Cmd+clic)."
+
+#: admin/admin-page.php:150
+msgid "Choose the color for each layer before uploading; check \"Outline only\" so it displays without fill."
+msgstr "Elige el color de cada capa antes de subirla; marca «Solo contorno» para que se muestre sin relleno."
+
+#. translators: %s: maximum upload size, already formatted (e.g. "64 MB")
+#: admin/admin-page.php:154 admin/admin-page.php:418
+#, php-format
+msgid "Maximum upload size: %s per file."
+msgstr "Tamaño máximo de subida: %s por archivo."
+
+#: admin/admin-page.php:158
+msgid "With very large files (tens of thousands of objects), the PHP memory limit and whether WP-Cron can run also matter — see \"Frequently Asked Questions\" on the plugin page."
+msgstr "Con archivos muy grandes (decenas de miles de objetos) también importan el límite de memoria de PHP y que WP-Cron pueda ejecutarse: consulta las «Preguntas frecuentes» en la página del plugin."
+
+#: admin/admin-page.php:163
+msgid "Create map"
+msgstr "Crear mapa"
+
+#: admin/admin-page.php:170
+msgid "Available maps"
+msgstr "Mapas disponibles"
+
+#: admin/admin-page.php:173
+msgid "No maps yet. Use the form above to create the first one."
+msgstr "Todavía no hay mapas. Usa el formulario de arriba para crear el primero."
+
+#: admin/admin-page.php:176
+msgid "Paste the shortcode into any page or post."
+msgstr "Pega el shortcode en cualquier página o entrada."
+
+#: admin/admin-page.php:177
+msgid "Optional parameters:"
+msgstr "Parámetros opcionales:"
+
+#: admin/admin-page.php:178
+msgid "px, default 550"
+msgstr "px, por defecto 550"
+
+#: admin/admin-page.php:179
+msgid "initial zoom, default 8"
+msgstr "zoom inicial, por defecto 8"
+
+#: admin/admin-page.php:180
+msgid "initial center"
+msgstr "centro inicial"
+
+#: admin/admin-page.php:181
+msgid "example:"
+msgstr "ejemplo:"
+
+#: admin/admin-page.php:242
+msgid "This map's layer data could not be read — contact support before making changes."
+msgstr "No se han podido leer los datos de las capas de este mapa: ponte en contacto con el soporte antes de hacer cambios."
+
+#: admin/admin-page.php:247
+msgid "Processing layers in the background…"
+msgstr "Procesando las capas en segundo plano…"
+
+#: admin/admin-page.php:258 admin/admin-page.php:603
+msgid "Copied!"
+msgstr "¡Copiado!"
+
+#: admin/admin-page.php:259 admin/admin-page.php:260
+msgid "Copy shortcode"
+msgstr "Copiar shortcode"
+
+#: admin/admin-page.php:267
+msgid "Forces the analysis right now, in case the background process (WP-Cron) hasn't triggered on its own. May take a while if the KML is very large."
+msgstr "Fuerza el análisis ahora mismo, por si el proceso en segundo plano (WP-Cron) no se ha lanzado solo. Puede tardar si el KML es muy grande."
+
+#: admin/admin-page.php:268
+msgid "Analyze now"
+msgstr "Analizar ahora"
+
+#. translators: %s: map name
+#: admin/admin-page.php:279
+#, php-format
+msgid "Delete the map \"%s\" and all its layers?"
+msgstr "¿Eliminar el mapa «%s» y todas sus capas?"
+
+#: admin/admin-page.php:282
+msgid "Delete map"
+msgstr "Eliminar mapa"
+
+#. translators: %d: number of layers in the map
+#: admin/admin-page.php:293
+#, php-format
+msgid "KML layers (%d):"
+msgstr "Capas KML (%d):"
+
+#: admin/admin-page.php:300
+msgid "No layers. Add KML files below."
+msgstr "No hay capas. Añade archivos KML abajo."
+
+#: admin/admin-page.php:306
+msgid "Color"
+msgstr "Color"
+
+#: admin/admin-page.php:307
+msgid "Layer name"
+msgstr "Nombre de la capa"
+
+#: admin/admin-page.php:308 glocalsaino-layer-map-viewer.php:90
+msgid "File"
+msgstr "Archivo"
+
+#: admin/admin-page.php:309 glocalsaino-layer-map-viewer.php:92
+msgid "Fill"
+msgstr "Relleno"
+
+#: admin/admin-page.php:337
+msgid "processing"
+msgstr "procesando"
+
+#: admin/admin-page.php:354 glocalsaino-layer-map-viewer.php:93
+msgid "Outline only"
+msgstr "Solo contorno"
+
+#: admin/admin-page.php:357
+msgid "Fill transparency"
+msgstr "Transparencia del relleno"
+
+#: admin/admin-page.php:361
+msgid "Save"
+msgstr "Guardar"
+
+#. translators: %s: layer name
+#: admin/admin-page.php:373
+#, php-format
+msgid "Delete the layer \"%s\"?"
+msgstr "¿Eliminar la capa «%s»?"
+
+#: admin/admin-page.php:376
+msgid "Delete layer"
+msgstr "Eliminar capa"
+
+#: admin/admin-page.php:398
+msgid "Add more KML layers"
+msgstr "Añadir más capas KML"
+
+#: admin/admin-page.php:414
+msgid "You can select several files. Choose the color for each layer before uploading; check \"Outline only\" so it displays without fill."
+msgstr "Puedes seleccionar varios archivos. Elige el color de cada capa antes de subirla; marca «Solo contorno» para que se muestre sin relleno."
+
+#: admin/admin-page.php:423
+msgid "Add layers"
+msgstr "Añadir capas"
+
+#: admin/admin-page.php:441
+msgid "Popup fields"
+msgstr "Campos de la ventana emergente"
+
+#: admin/admin-page.php:446
+msgid "Select the fields that will be shown when clicking a feature, and the field to filter by:"
+msgstr "Selecciona los campos que se mostrarán al hacer clic en un elemento, y el campo por el que filtrar:"
+
+#: admin/admin-page.php:456
+msgid "Filter field:"
+msgstr "Campo de filtro:"
+
+#: admin/admin-page.php:461
+msgid "— No filter —"
+msgstr "— Sin filtro —"
+
+#: admin/admin-page.php:476
+msgid "The selector in the map's bottom bar will use this field."
+msgstr "El selector de la barra inferior del mapa usará este campo."
+
+#: admin/admin-page.php:480
+msgid "Fields visible in the popup:"
+msgstr "Campos visibles en la ventana emergente:"
+
+#: admin/admin-page.php:483
+msgid "In parentheses, the layer(s) where each field appears — useful if several layers have a field with the same name but a different meaning."
+msgstr "Entre paréntesis, la capa o capas en las que aparece cada campo: útil si varias capas tienen un campo con el mismo nombre pero distinto significado."
+
+#: admin/admin-page.php:505
+msgid "Save selection"
+msgstr "Guardar selección"
+
+#: admin/admin-page.php:516
+msgid "Filter box appearance"
+msgstr "Aspecto de la caja de filtro"
+
+#: admin/admin-page.php:521
+msgid "Colors for the filter bar and the \"Clear filter\" button shown below the map."
+msgstr "Colores de la barra de filtro y del botón «Quitar filtro» que se muestran bajo el mapa."
+
+#: admin/admin-page.php:531
+msgid "Bar background"
+msgstr "Fondo de la barra"
+
+#: admin/admin-page.php:537
+msgid "Bar text"
+msgstr "Texto de la barra"
+
+#: admin/admin-page.php:543
+msgid "Button background"
+msgstr "Fondo del botón"
+
+#: admin/admin-page.php:549
+msgid "Button text"
+msgstr "Texto del botón"
+
+#: admin/admin-page.php:557
+msgid "Reset to default colors"
+msgstr "Restablecer los colores por defecto"
+
+#: admin/admin-page.php:560
+msgid "Save appearance"
+msgstr "Guardar aspecto"
+
+#: admin/admin-page.php:575
+msgid "Filter links"
+msgstr "Enlaces de filtro"
+
+#: admin/admin-page.php:581
+msgid "Paste the shortcode into a published page or post first — the link needs to know where the map is shown."
+msgstr "Primero pega el shortcode en una página o entrada publicada: el enlace necesita saber dónde se muestra el mapa."
+
+#: admin/admin-page.php:585
+msgid "Each link opens the map with that value already selected in the filter, as if a visitor had picked it by hand — share it for a \"detail\" view instead of the full map."
+msgstr "Cada enlace abre el mapa con ese valor ya seleccionado en el filtro, como si el visitante lo hubiera elegido a mano: compártelo para una vista de «detalle» en lugar del mapa completo."
+
+#: admin/admin-page.php:604 admin/admin-page.php:605
+msgid "Copy link"
+msgstr "Copiar enlace"
+
+#: glocalsaino-layer-map-viewer.php:91
+msgid "Layer color"
+msgstr "Color de la capa"
+
+#: glocalsaino-layer-map-viewer.php:97
+msgid "Marker (px)"
+msgstr "Marcador (px)"
+
+#: glocalsaino-layer-map-viewer.php:114 glocalsaino-layer-map-viewer.php:115
+#: glocalsaino-layer-map-viewer.php:153
+msgid "Extensions"
+msgstr "Extensiones"
+
+#: glocalsaino-layer-map-viewer.php:137
+msgid "Active"
+msgstr "Activo"
+
+#: glocalsaino-layer-map-viewer.php:141
+msgid "Learn more"
+msgstr "Más información"
+
+#: glocalsaino-layer-map-viewer.php:157
+msgid "GlocalSaino External Data Layers"
+msgstr "GlocalSaino External Data Layers"
+
+#: glocalsaino-layer-map-viewer.php:158
+msgid "Feed this map from a URL or an uploaded file — GeoJSON, KML, GPX, CSV, JSON, XML, or XLSX — with automatic refresh for live sources, plus three free base map styles (Topographic, Light, Dark)."
+msgstr "Alimenta este mapa desde una URL o un archivo subido (GeoJSON, KML, GPX, CSV, JSON, XML o XLSX), con actualización automática para las fuentes en directo, y tres estilos de mapa base gratuitos (Topográfico, Claro y Oscuro)."
+
+#: glocalsaino-layer-map-viewer.php:165
+msgid "Built for more than just maps"
+msgstr "Pensado para algo más que mapas"
+
+#: glocalsaino-layer-map-viewer.php:167
+msgid "If you're mapping something for sale — a parcel, a property, an asset — pair this plugin with two more free GlocalSaino tools built for exactly that."
+msgstr "Si estás representando algo que está a la venta (una parcela, un inmueble, un bien), combina este plugin con otras dos herramientas gratuitas de GlocalSaino pensadas justo para eso."
+
+#: glocalsaino-layer-map-viewer.php:172
+msgid "GlocalSaino Auctions Displayed by Shortcodes"
+msgstr "GlocalSaino Auctions Displayed by Shortcodes"
+
+#: glocalsaino-layer-map-viewer.php:173
+msgid "Turn what's on the map into something biddable. Run a real auction for the item the map is showing — bids, countdown, automatic winner — with one shortcode."
+msgstr "Convierte lo que hay en el mapa en algo por lo que se puede pujar. Organiza una subasta real del elemento que muestra el mapa (pujas, cuenta atrás y ganador automático) con un solo shortcode."
+
+#: glocalsaino-layer-map-viewer.php:180
+msgid "GlocalSaino WebPagesPassworded"
+msgstr "GlocalSaino WebPagesPassworded"
+
+#: glocalsaino-layer-map-viewer.php:181
+msgid "Show the map only to people who should see it. Password-protect the page where this map lives — useful when a listing shouldn't be public yet."
+msgstr "Muestra el mapa solo a quien deba verlo. Protege con contraseña la página donde está el mapa: útil cuando un anuncio todavía no debe ser público."
+
+#: glocalsaino-layer-map-viewer.php:188
+msgid "Automate what happens on your maps"
+msgstr "Automatiza lo que pasa en tus mapas"
+
+#: glocalsaino-layer-map-viewer.php:190
+msgid "GlocalSaino Automations Based on Triggers is free; its add-on Automations Bridge connects your maps with your automations."
+msgstr "GlocalSaino Automations Based on Triggers es gratuito; su extensión Automations Bridge conecta tus mapas con tus automatizaciones."
+
+#: glocalsaino-layer-map-viewer.php:195
+msgid "GlocalSaino Automations Based on Triggers"
+msgstr "GlocalSaino Automations Based on Triggers"
+
+#: glocalsaino-layer-map-viewer.php:196
+msgid "Automate your website without code: when a form is sent, a link or a button is clicked or a file is uploaded, send emails, call webhooks, fill tables or schedule what happens next."
+msgstr "Automatiza tu sitio web sin código: cuando se envía un formulario, se hace clic en un enlace o un botón o se sube un archivo, envía correos electrónicos, llama a webhooks, rellena tablas o programa lo que pasa después."
+
+#: glocalsaino-layer-map-viewer.php:203
+msgid "GlocalSaino Automations Bridge"
+msgstr "GlocalSaino Automations Bridge"
+
+#: glocalsaino-layer-map-viewer.php:204
+msgid "Turn every layer you upload into a searchable table, add points to a map from any form, and get an alert when an external data layer brings new items."
+msgstr "Convierte cada capa que subas en una tabla con buscador, añade puntos a un mapa desde cualquier formulario y recibe un aviso cuando una capa de datos externos trae elementos nuevos."
+
+#: glocalsaino-layer-map-viewer.php:1187 glocalsaino-layer-map-viewer.php:1246
+#: glocalsaino-layer-map-viewer.php:1290 glocalsaino-layer-map-viewer.php:1327
+#: glocalsaino-layer-map-viewer.php:1358 glocalsaino-layer-map-viewer.php:1398
+#: glocalsaino-layer-map-viewer.php:1422 glocalsaino-layer-map-viewer.php:1452
+msgid "No permission."
+msgstr "Sin permiso."
+
+#. translators: 1: layer name, 2: objects loaded, 3: total objects
+#: glocalsaino-layer-map-viewer.php:1592
+#, php-format
+msgid "%1$s: loading objects… (%2$s of %3$s)"
+msgstr "%1$s: cargando objetos… (%2$s de %3$s)"
+
+#. translators: %d: always 1 (singular)
+#: glocalsaino-layer-map-viewer.php:1594
+#, php-format
+msgid "%d minute ago"
+msgstr "hace %d minuto"
+
+#. translators: %d: number of minutes
+#: glocalsaino-layer-map-viewer.php:1596
+#, php-format
+msgid "%d minutes ago"
+msgstr "hace %d minutos"
+
+#: glocalsaino-layer-map-viewer.php:1614
+msgid "Satellite"
+msgstr "Satélite"
+
+#: glocalsaino-layer-map-viewer.php:1632
+msgid "just now"
+msgstr "ahora mismo"
+
+#: glocalsaino-layer-map-viewer.php:1635
+msgid "updating…"
+msgstr "actualizando…"
+
+#: glocalsaino-layer-map-viewer.php:1639
+msgid "live layers"
+msgstr "capas en directo"
+
+#: glocalsaino-layer-map-viewer.php:1641
+msgid "Show my location"
+msgstr "Mostrar mi ubicación"
+
+#: glocalsaino-layer-map-viewer.php:1642
+msgid "Location permission denied. Allow it in your browser settings and try again."
+msgstr "Permiso de ubicación denegado. Permítelo en los ajustes de tu navegador y vuelve a intentarlo."
+
+#: glocalsaino-layer-map-viewer.php:1643
+msgid "Your location could not be determined."
+msgstr "No se ha podido determinar tu ubicación."
+
+#: glocalsaino-layer-map-viewer.php:1645
+msgid "Full screen"
+msgstr "Pantalla completa"
+
+#: glocalsaino-layer-map-viewer.php:1646
+msgid "Exit full screen"
+msgstr "Salir de pantalla completa"
+
+#: glocalsaino-layer-map-viewer.php:1680
+msgid "Filter by:"
+msgstr "Filtrar por:"
+
+#: glocalsaino-layer-map-viewer.php:1686
+msgid "Clear filter"
+msgstr "Quitar filtro"
